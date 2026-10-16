@@ -100,4 +100,18 @@ class EditTest {
         // Единственный — линия исчезает.
         assertEquals(0, Edit.deleteSegment(Edit.deleteSegment(split, "t", 0, "y"), "t2", 0, "z").engineering.size)
     }
+
+    @Test
+    fun `lasso deletes several segments at once`() {
+        val line = EngElement("t", EngType.TRAY, widthMm = 200, heightMm = 60)
+            .withRoute(List(6) { Point(it * 100.0, 0.0) }) // 5 участков
+        val other = EngElement("o", EngType.PIPE, diameterMm = 50).withRoute(listOf(Point(0.0, 50.0), Point(100.0, 50.0)))
+        val r = room().copy(engineering = listOf(line, other))
+        var n = 0
+        val out = Edit.deleteSegments(r, setOf("t" to 1, "t" to 3, "o" to 0)) { "new${n++}" }
+        // Остались участки 0, 2 и 4 линии «t» — три отдельные линии; труба удалена целиком.
+        assertEquals(listOf("t", "new0", "new1"), out.engineering.map { it.id })
+        assertEquals(listOf(2, 2, 2), out.engineering.map { it.route.size })
+        assertEquals(Point(200.0, 0.0), out.engineering[1].route[0])
+    }
 }

@@ -223,6 +223,39 @@ object Edit {
         return room.copy(engineering = list)
     }
 
+    /**
+     * Стирает сразу несколько участков (выбор лассо). Оставшиеся подряд идущие участки
+     * каждой линии становятся отдельными линиями: первая сохраняет id, остальные
+     * получают новые из [newId].
+     */
+    fun deleteSegments(room: Room, segments: Set<Pair<String, Int>>, newId: () -> String): Room {
+        if (segments.isEmpty()) return room
+        val result = ArrayList<EngElement>()
+        for (e in room.engineering) {
+            val drop = segments.filter { it.first == e.id }.map { it.second }.toSet()
+            if (drop.isEmpty()) {
+                result += e
+                continue
+            }
+            // Серии подряд идущих оставшихся участков.
+            var first = true
+            var i = 0
+            while (i < e.segments.size) {
+                if (i in drop) { i++; continue }
+                val start = i
+                while (i < e.segments.size && i !in drop) i++
+                result += e.copy(
+                    id = if (first) e.id else newId(),
+                    route = e.route.subList(start, i + 1).toList(),
+                    segments = e.segments.subList(start, i).toList(),
+                    segmentElevationsMm = e.segmentElevationsMm.subList(start, i).toList(),
+                )
+                first = false
+            }
+        }
+        return room.copy(engineering = result)
+    }
+
     /** Своя высота участка (мм) или null — как у всей трассы. */
     fun setSegmentElevation(room: Room, elementId: String, index: Int, mm: Int?): Room = room.copy(
         engineering = room.engineering.map { e ->

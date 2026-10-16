@@ -279,6 +279,15 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     fun setSegmentElevation(elementId: String, index: Int, mm: Int?) =
         editRoom { Edit.setSegmentElevation(this, elementId, index, mm) }
 
+    /** Удаление выбранного лассо — одним шагом отмены. */
+    fun eraseMany(segments: Set<Pair<String, Int>>, columnIds: Set<String>) {
+        dialogTarget = null
+        editRoom {
+            Edit.deleteSegments(this, segments) { UUID.randomUUID().toString() }
+                .let { r -> r.copy(columns = r.columns.filterNot { it.id in columnIds }) }
+        }
+    }
+
     // --- Слои инженерии ------------------------------------------------------
 
     /** Скрытые слои (системы) на этапе «Инженерия». */

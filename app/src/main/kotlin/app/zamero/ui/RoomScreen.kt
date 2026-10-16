@@ -148,6 +148,8 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
     var lineMenu by remember(room.id) { mutableStateOf<Pair<MeasureTarget, Offset>?>(null) }
     // Окно своей высоты участка трассы.
     var heightTarget by remember(room.id) { mutableStateOf<MeasureTarget.EngSegment?>(null) }
+    // Выбранное к удалению (лассо и касания в режиме «Стереть»).
+    var eraseSelection by remember(room.id) { mutableStateOf(emptySet<EraseHit>()) }
     // «Дорисовать»: рисуем линию, потом выбираем, что это, потом параметры.
     var drawingExtra by remember(room.id) { mutableStateOf(false) }
     var extraRoute by remember(room.id) { mutableStateOf<List<Point>?>(null) }
@@ -196,7 +198,11 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                     CanvasMode.DRAW_EXTRA -> if (eng) "Проведите трассу пальцем — она выровняется вдоль стен" else "Дорисуйте стену или перегородку; обведите колонну"
                     CanvasMode.VIEW -> when (tool) {
                         Tool.SELECT -> summary(room, eng) + " · точки можно тянуть"
-                        Tool.ERASE -> "Стереть: нажмите на линию или колонну"
+                        Tool.ERASE -> if (eraseSelection.isEmpty()) {
+                            "Стереть: обведите пальцем линии (лассо) или нажмите на линию"
+                        } else {
+                            "Можно обвести ещё или нажать на линию, чтобы убрать её из выбора"
+                        }
                         Tool.MEASURE -> if (measureB == null) "Размер: нажмите две точки на плане" else "Размер: нажмите новую точку, чтобы перемерить"
                     }
                 },
@@ -266,25 +272,24 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                     hiddenSystems = vm.hiddenSystems,
                     onPointMove = vm::movePoint,
                     onErase = { hit ->
-                        when (hit) {
-                            is EraseHit.PointHit -> {
-                                if (hit.ref is PointRef.Vertex && room.outline.size <= 3) {
-                                    Toast.makeText(context, "У контура должно остаться хотя бы 3 точки", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    vm.deletePoint(hit.ref)
-                                }
-                            }
-                            is EraseHit.ColumnHit -> vm.deleteColumn(hit.id)
-                            is EraseHit.Segment -> when (val t = hit.target) {
-                                is MeasureTarget.EngSegment -> vm.deleteSegment(t.elementId, t.index)
-                                else -> Toast.makeText(
-                                    context,
-                                    "Стену контура стереть нельзя — потяните за её точки или перерисуйте контур",
-                                    Toast.LENGTH_LONG,
-                                ).show()
-                            }
+                        val wall = (hit as? EraseHit.Segment)?.target is MeasureTarget.Wall
+                        if (wall) {
+                            Toast.makeText(
+                                context,
+                                "Стену контура удалить нельзя — потяните за её точки или перерисуйте контур",
+                                Toast.LENGTH_LONG,
+                            ).show()
+                        } else {
+                            eraseSelection = if (hit in eraseSelection) eraseSelection - hit else eraseSelection + hit
                         }
                     },
+                    onLasso = { picked ->
+                        eraseSelection = eraseSelection + picked
+                        if (picked.isEmpty()) {
+                            Toast.makeText(context, "В петлю не попало ни одной линии", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    pendingErase = eraseSelection,
                     measureA = measureA,
                     measureB = measureB,
                     onMeasureTap = { p ->
@@ -314,7 +319,33 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                     }
                 }
             }
-            if (mode == CanvasMode.VIEW) {
+            if (mode == CanvasMode.VIEW && tool == Tool.ERASE && eraseSelection.isNotEmpty()) {
+                // Подтверждение удаления выбранного лассо.
+                Surface(tonalElevation = 3.dp) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text("Выбрано: ${eraseSelection.size}", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                        TextButton(onClick = { eraseSelection = emptySet() }) { Text("Отмена") }
+                        androidx.compose.material3.Button(
+                            onClick = {
+                                val segments = eraseSelection.mapNotNull { h ->
+                                    ((h as? EraseHit.Segment)?.target as? MeasureTarget.EngSegment)?.let { it.elementId to it.index }
+                                }.toSet()
+                                val columns = eraseSelection.mapNotNull { (it as? EraseHit.ColumnHit)?.id }.toSet()
+                                vm.eraseMany(segments, columns)
+                                eraseSelection = emptySet()
+                            },
+                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.error,
+                                contentColor = MaterialTheme.colorScheme.onError,
+                            ),
+                        ) { Text("Удалить") }
+                    }
+                }
+            } else if (mode == CanvasMode.VIEW) {
                 EditorToolbar {
                     ToolButton("↶", "Назад", enabled = vm.canUndo, onClick = vm::undo)
                     ToolButton("↷", "Вперёд", enabled = vm.canRedo, onClick = vm::redo)
@@ -324,6 +355,7 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                     }
                     ToolButton("⌫", "Стереть", selected = tool == Tool.ERASE) {
                         tool = if (tool == Tool.ERASE) Tool.SELECT else Tool.ERASE
+                        eraseSelection = emptySet()
                     }
                     ToolButton("↔", "Размер", selected = tool == Tool.MEASURE) {
                         tool = if (tool == Tool.MEASURE) Tool.SELECT else Tool.MEASURE

@@ -155,7 +155,12 @@ fun PlanCanvas(
     /** Выключенные слои инженерии — не рисуются и не нажимаются. */
     hiddenSystems: Set<Discipline> = emptySet(),
     onPointMove: (PointRef, Point, Double) -> Unit = { _, _, _ -> },
+    /** Режим «Стереть»: касание — добавить/убрать линию из выбора. */
     onErase: (EraseHit) -> Unit = {},
+    /** Режим «Стереть»: обвели петлю — всё, что внутри. */
+    onLasso: (Set<EraseHit>) -> Unit = {},
+    /** Выбранное к удалению — подсвечивается красным пунктиром. */
+    pendingErase: Set<EraseHit> = emptySet(),
     measureA: Point? = null,
     measureB: Point? = null,
     onMeasureTap: (Point) -> Unit = {},
@@ -233,6 +238,7 @@ fun PlanCanvas(
     val onTapState by rememberUpdatedState(onTap)
     val onPointMoveState by rememberUpdatedState(onPointMove)
     val onEraseState by rememberUpdatedState(onErase)
+    val onLassoState by rememberUpdatedState(onLasso)
     val onMeasureTapState by rememberUpdatedState(onMeasureTap)
 
     val outlineColor = MaterialTheme.colorScheme.outlineVariant
@@ -311,7 +317,7 @@ fun PlanCanvas(
                                 else -> best?.let { onTapState(it, pos) }
                             }
                             Tool.ERASE -> when {
-                                // Стираем линии (участки) и колонны, точки — нет.
+                                // Касание добавляет линию или колонну в выбор (или убирает из него).
                                 best != null -> onEraseState(EraseHit.Segment(best!!))
                                 hitColumn != null && !engineeringStage -> onEraseState(EraseHit.ColumnHit(hitColumn.first.id))
                             }
@@ -323,6 +329,46 @@ fun PlanCanvas(
                         }
                     },
                 )
+            }
+            .pointerInput("lasso") {
+                // Лассо: обводим пальцем — всё внутри петли выбирается к удалению.
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    if (toolState != Tool.ERASE) return@awaitEachGesture
+                    stroke.clear()
+                    stroke.add(down.position)
+                    var pinch = false
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        if (event.changes.count { it.pressed } > 1) {
+                            pinch = true // двумя пальцами — масштаб, не лассо
+                            break
+                        }
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) break
+                        if (change.positionChange() != Offset.Zero) {
+                            stroke.add(change.position)
+                            change.consume()
+                        }
+                    }
+                    val loop = stroke.toList()
+                    stroke.clear()
+                    if (pinch || pathLength(loop) < viewConfiguration.touchSlop * 4) return@awaitEachGesture
+                    val (_, r, v) = current
+                    val picked = mutableSetOf<EraseHit>()
+                    r.filter { isActive(it.first) }.forEach { (e, pts) ->
+                        for (i in 0 until pts.size - 1) {
+                            val mid = Offset((pts[i].x + pts[i + 1].x) / 2, (pts[i].y + pts[i + 1].y) / 2)
+                            if (insidePolygon(mid, loop)) picked += EraseHit.Segment(MeasureTarget.EngSegment(e.id, i))
+                        }
+                    }
+                    if (!engineeringStage) {
+                        currentColumns.forEach { (col, cp) ->
+                            if (insidePolygon(v.toScreen(cp.center), loop)) picked += EraseHit.ColumnHit(col.id)
+                        }
+                    }
+                    onLassoState(picked)
+                }
             }
             .pointerInput("drag") {
                 awaitEachGesture {
@@ -424,6 +470,28 @@ fun PlanCanvas(
             columns.forEach { (col, cp) ->
                 drawColumn(toScreen, cp, col, selected, measurer, labelBg, "К${shown.columns.indexOf(col) + 1}", faded = engineeringStage)
             }
+            // Выбранное к удалению — красный пунктир поверх.
+            if (pendingErase.isNotEmpty()) {
+                val red = Color(0xFFE53935)
+                val dash = PathEffect.dashPathEffect(floatArrayOf(14f, 8f))
+                pendingErase.forEach { hit ->
+                    when (hit) {
+                        is EraseHit.Segment -> {
+                            val t = hit.target as? MeasureTarget.EngSegment ?: return@forEach
+                            val pts = routes.firstOrNull { it.first.id == t.elementId }?.second ?: return@forEach
+                            if (t.index + 1 >= pts.size) return@forEach
+                            drawLine(red, pts[t.index], pts[t.index + 1], 7.dp.toPx(), StrokeCap.Round, dash)
+                        }
+                        is EraseHit.ColumnHit -> {
+                            val cp = columns.firstOrNull { it.first.id == hit.id }?.second ?: return@forEach
+                            val c = toScreen(cp.center)
+                            val edge = toScreen(Point(cp.center.x + cp.u.x * maxOf(cp.width, cp.depth) * 0.75, cp.center.y + cp.u.y * maxOf(cp.width, cp.depth) * 0.75))
+                            drawCircle(red, maxOf((edge - c).getDistance(), 14.dp.toPx()), c, style = Stroke(3.dp.toPx(), pathEffect = dash))
+                        }
+                        is EraseHit.PointHit -> Unit
+                    }
+                }
+            }
             // Активные точки — за них можно тянуть, к ним прилипают линии и линейка.
             if (mode == CanvasMode.VIEW && tool != Tool.ERASE) {
                 handles.forEach { (r, p) ->
@@ -450,7 +518,17 @@ fun PlanCanvas(
                     moveTo(stroke[0].x, stroke[0].y)
                     for (i in 1 until stroke.size) lineTo(stroke[i].x, stroke[i].y)
                 }
-                drawPath(path, strokeColor, style = Stroke(4.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+                val lasso = tool == Tool.ERASE && mode == CanvasMode.VIEW
+                drawPath(
+                    path,
+                    if (lasso) Color(0xFFE53935) else strokeColor,
+                    style = Stroke(
+                        (if (lasso) 2.dp else 4.dp).toPx(),
+                        cap = StrokeCap.Round,
+                        join = StrokeJoin.Round,
+                        pathEffect = if (lasso) PathEffect.dashPathEffect(floatArrayOf(12f, 8f)) else null,
+                    ),
+                )
             }
         }
     }
@@ -556,6 +634,22 @@ private fun DrawScope.label(
     )
     drawText(layout, topLeft = topLeft)
 }
+
+/** Точка внутри многоугольника (лучевой метод); петля лассо замыкается сама. */
+private fun insidePolygon(p: Offset, poly: List<Offset>): Boolean {
+    if (poly.size < 3) return false
+    var inside = false
+    var j = poly.lastIndex
+    for (i in poly.indices) {
+        val a = poly[i]
+        val b = poly[j]
+        if ((a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x) inside = !inside
+        j = i
+    }
+    return inside
+}
+
+private fun pathLength(pts: List<Offset>): Float = pts.zipWithNext { a, b -> (b - a).getDistance() }.sum()
 
 private fun distanceToSegment(p: Offset, a: Offset, b: Offset): Float {
     val dx = b.x - a.x
