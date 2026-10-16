@@ -1,6 +1,8 @@
 package app.zamero.data
 
 import android.content.Context
+import app.zamero.core.EngElement
+import app.zamero.core.EngType
 import app.zamero.core.Measure
 import app.zamero.core.Opening
 import app.zamero.core.OpeningType
@@ -58,6 +60,39 @@ class ProjectStore(context: Context) {
                 },
             ),
         )
+        .put("engineering", JSONArray(engineering.map { it.toJson() }))
+
+    private fun EngElement.toJson() = JSONObject()
+        .put("id", id)
+        .put("type", type.name)
+        .put("route", JSONArray(route.map { JSONArray().put(it.x).put(it.y) }))
+        .put("segments", JSONArray(segments.map { it.toJson() ?: JSONObject.NULL }))
+        .put("diameter", diameterMm ?: JSONObject.NULL)
+        .put("width", widthMm ?: JSONObject.NULL)
+        .put("height", heightMm ?: JSONObject.NULL)
+        .put("elevation", elevationMm ?: JSONObject.NULL)
+        .put("note", note)
+
+    private fun JSONObject.toEng(): EngElement {
+        val route = getJSONArray("route").points()
+        val segs = getJSONArray("segments").let { arr -> List(arr.length()) { arr.optJSONObject(it).toMeasure() } }
+        return EngElement(
+            id = getString("id"),
+            type = EngType.valueOf(getString("type")),
+            route = route,
+            segments = List((route.size - 1).coerceAtLeast(0)) { segs.getOrNull(it) },
+            diameterMm = optIntOrNull("diameter"),
+            widthMm = optIntOrNull("width"),
+            heightMm = optIntOrNull("height"),
+            elevationMm = optIntOrNull("elevation"),
+            note = optString("note"),
+        )
+    }
+
+    private fun JSONObject.optIntOrNull(key: String): Int? = if (isNull(key)) null else optInt(key)
+
+    private fun JSONArray.points(): List<Point> =
+        List(length()) { i -> getJSONArray(i).let { Point(it.getDouble(0), it.getDouble(1)) } }
 
     private fun Measure?.toJson(): JSONObject? =
         this?.let { JSONObject().put("m", it.meters).put("src", it.source.name) }
@@ -72,9 +107,7 @@ class ProjectStore(context: Context) {
     )
 
     private fun JSONObject.toRoom(): Room {
-        val outline = getJSONArray("outline").let { arr ->
-            List(arr.length()) { i -> arr.getJSONArray(i).let { Point(it.getDouble(0), it.getDouble(1)) } }
-        }
+        val outline = getJSONArray("outline").points()
         val walls = getJSONArray("walls").let { arr -> List(arr.length()) { arr.optJSONObject(it).toMeasure() } }
         return Room(
             id = getString("id"),
@@ -89,6 +122,7 @@ class ProjectStore(context: Context) {
                     height = o.optJSONObject("height").toMeasure(),
                 )
             },
+            engineering = optJSONArray("engineering")?.objects()?.map { it.toEng() } ?: emptyList(),
         )
     }
 

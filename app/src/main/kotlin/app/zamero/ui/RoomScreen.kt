@@ -19,6 +19,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
@@ -40,15 +42,22 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import app.zamero.core.EngElement
+import app.zamero.core.EngType
 import app.zamero.core.Geometry
 import app.zamero.core.MeasureFlow
 import app.zamero.core.MeasureTarget
 import app.zamero.core.OpeningType
 import app.zamero.core.Outlines
+import app.zamero.core.Plan
 import app.zamero.core.Room
 import app.zamero.core.Straighten
 import app.zamero.laser.LaserState
 import java.util.Locale
+import kotlin.math.atan2
+
+/** Окно параметров инженерии: новый элемент выбранного типа или правка существующего. */
+private data class EngEdit(val type: EngType, val element: EngElement?)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -56,12 +65,19 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
     val context = LocalContext.current
     var renaming by remember { mutableStateOf(false) }
     var laserDialog by remember { mutableStateOf(false) }
-    // Новое помещение сразу открывается в режиме рисования.
+    var engMenu by remember { mutableStateOf(false) }
+    var engEdit by remember { mutableStateOf<EngEdit?>(null) }
     var redrawing by remember(room.id) { mutableStateOf(false) }
-    val drawMode = redrawing || !room.hasOutline
     val laserState by vm.laser.state.collectAsState()
     val laserConnected = laserState is LaserState.Connected
     val target = vm.dialogTarget
+    val routing = vm.routingElementId?.let { id -> room.engineering.firstOrNull { it.id == id } }
+
+    val mode = when {
+        redrawing || !room.hasOutline -> CanvasMode.DRAW_OUTLINE
+        routing != null -> CanvasMode.DRAW_ROUTE
+        else -> CanvasMode.VIEW
+    }
 
     Scaffold(
         topBar = {
@@ -69,6 +85,7 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                 navigationIcon = { TextButton(onClick = vm::closeRoom) { Text("Назад") } },
                 title = { Text(room.name, modifier = Modifier.clickable { renaming = true }) },
                 actions = {
+                    if (vm.canUndo) TextButton(onClick = vm::undo) { Text("↶") }
                     TextButton(onClick = { laserDialog = true }) {
                         Text(if (laserConnected) "Дальномер ✓" else "Дальномер")
                     }
@@ -78,19 +95,19 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             Text(
-                if (drawMode) {
-                    "Нарисуйте контур помещения пальцем или стилусом одной линией — она сама выпрямится."
-                } else {
-                    "Нажмите на стену, чтобы ввести её длину."
+                when (mode) {
+                    CanvasMode.DRAW_OUTLINE -> "Нарисуйте контур помещения пальцем или стилусом одной линией — она сама выпрямится."
+                    CanvasMode.DRAW_ROUTE -> "Проведите трассу «${routing?.label}» поверх плана — участки выровняются по стенам."
+                    CanvasMode.VIEW -> "Нажмите на стену или участок инженерии, чтобы ввести длину. Двумя пальцами — масштаб, двойное касание — сброс."
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
-            OutlineCanvas(
+            PlanCanvas(
                 room = room,
-                drawMode = drawMode,
-                selectedWall = (target as? MeasureTarget.Wall)?.index,
-                onStroke = { stroke ->
+                mode = mode,
+                selected = target,
+                onOutline = { stroke ->
                     val poly = Straighten.polygon(stroke)
                     if (poly == null) {
                         Toast.makeText(context, "Не получилось распознать контур — нарисуйте замкнутую фигуру крупнее", Toast.LENGTH_SHORT).show()
@@ -99,26 +116,59 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                         redrawing = false
                     }
                 },
-                onWallTap = { vm.openDialog(MeasureTarget.Wall(it)) },
+                onRoute = { planStroke ->
+                    val element = routing ?: return@PlanCanvas
+                    val plan = Plan.room(room) ?: return@PlanCanvas
+                    // Выравниваем трассу по направлению первой стены, затем переводим в координаты эскиза.
+                    val w0 = plan.walls.first()
+                    val base = atan2(w0.b.y - w0.a.y, w0.b.x - w0.a.x)
+                    val line = Straighten.polyline(planStroke, base)
+                    if (line == null) {
+                        Toast.makeText(context, "Трасса слишком короткая — проведите линию длиннее", Toast.LENGTH_SHORT).show()
+                    } else {
+                        vm.setRoute(element.id, line.map { Plan.toSketch(room, plan, it) })
+                    }
+                },
+                onTap = vm::openDialog,
                 modifier = Modifier.fillMaxWidth().height(340.dp).padding(horizontal = 16.dp),
             )
             Row(
                 Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (drawMode) {
-                    OutlinedButton(onClick = { vm.setOutline(Outlines.RECTANGLE); redrawing = false }) { Text("Прямоугольник") }
-                    OutlinedButton(onClick = { vm.setOutline(Outlines.L_SHAPE); redrawing = false }) { Text("Г-образная") }
-                    if (room.hasOutline) TextButton(onClick = { redrawing = false }) { Text("Отмена") }
-                } else {
-                    OutlinedButton(onClick = { redrawing = true }) { Text("Перерисовать") }
-                    MeasureFlow.nextEmpty(room)?.let { next ->
-                        FilledTonalButton(onClick = { vm.openDialog(next) }) { Text("Мерить по порядку") }
+                when (mode) {
+                    CanvasMode.DRAW_OUTLINE -> {
+                        OutlinedButton(onClick = { vm.setOutline(Outlines.RECTANGLE); redrawing = false }) { Text("Прямоугольник") }
+                        OutlinedButton(onClick = { vm.setOutline(Outlines.L_SHAPE); redrawing = false }) { Text("Г-образная") }
+                        if (room.hasOutline) TextButton(onClick = { redrawing = false }) { Text("Отмена") }
+                    }
+                    CanvasMode.DRAW_ROUTE -> TextButton(onClick = vm::cancelRouting) { Text("Отмена") }
+                    CanvasMode.VIEW -> {
+                        Box {
+                            FilledTonalButton(onClick = { engMenu = true }) { Text("Инженерия ▾") }
+                            DropdownMenu(expanded = engMenu, onDismissRequest = { engMenu = false }) {
+                                EngType.entries.forEach { type ->
+                                    DropdownMenuItem(
+                                        text = { Text(type.title) },
+                                        leadingIcon = { Box(Modifier.size(14.dp).background(engColor(type), CircleShape)) },
+                                        onClick = {
+                                            engMenu = false
+                                            engEdit = EngEdit(type, null)
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                        MeasureFlow.nextEmpty(room)?.let { next ->
+                            OutlinedButton(onClick = { vm.openDialog(next) }) { Text("Мерить по порядку") }
+                        }
+                        OutlinedButton(onClick = { redrawing = true }) { Text("Перерисовать") }
                     }
                 }
             }
             if (room.hasOutline) {
-                MeasureList(vm, room, Modifier.weight(1f))
+                MeasureList(vm, room, onEditEng = { engEdit = EngEdit(it.type, it) }, modifier = Modifier.weight(1f))
             }
         }
     }
@@ -128,7 +178,7 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
             val after = MeasureFlow.nextEmpty(room, target)
             MeasureDialog(
                 title = MeasureFlow.label(room, target),
-                color = (target as? MeasureTarget.Wall)?.let { wallColor(it.index, room.walls.size) },
+                color = targetColor(room, target),
                 current = MeasureFlow.valueOf(room, target),
                 laserConnected = laserConnected,
                 lastLaser = vm.lastLaser,
@@ -137,6 +187,17 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                 onDismiss = vm::closeDialog,
             )
         }
+    }
+    engEdit?.let { edit ->
+        EngParamsDialog(
+            type = edit.type,
+            initial = edit.element,
+            onSave = { params ->
+                if (edit.element == null) vm.addEngineering(edit.type, params) else vm.editEngineering(edit.element.id, params)
+                engEdit = null
+            },
+            onDismiss = { engEdit = null },
+        )
     }
     if (renaming) {
         NameDialog("Название помещения", room.name, onDismiss = { renaming = false }) {
@@ -149,29 +210,39 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
     }
 }
 
+private fun targetColor(room: Room, target: MeasureTarget): Color? = when (target) {
+    is MeasureTarget.Wall -> wallColor(target.index, room.walls.size)
+    is MeasureTarget.EngSegment -> room.engineering.firstOrNull { it.id == target.elementId }?.let { engColor(it.type) }
+    else -> null
+}
+
 @Composable
-private fun MeasureList(vm: MeasureViewModel, room: Room, modifier: Modifier) {
+private fun MeasureList(vm: MeasureViewModel, room: Room, onEditEng: (EngElement) -> Unit, modifier: Modifier) {
     LazyColumn(
         modifier = modifier,
         contentPadding = PaddingValues(16.dp, 0.dp, 16.dp, 24.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         MeasureFlow.targets(room).forEach { t ->
-            if (t is MeasureTarget.OpeningWidth) {
-                item(key = "head-${t.index}") {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            MeasureFlow.openingTitle(room, t.index),
-                            style = MaterialTheme.typography.titleSmall,
-                            modifier = Modifier.weight(1f),
-                        )
+            when {
+                t is MeasureTarget.OpeningWidth -> item(key = "opening-${t.index}") {
+                    SectionHeader(MeasureFlow.openingTitle(room, t.index)) {
                         TextButton(onClick = { vm.removeOpening(t.index) }) { Text("Убрать") }
+                    }
+                }
+                t is MeasureTarget.EngSegment && t.index == 0 -> {
+                    val e = room.engineering.first { it.id == t.elementId }
+                    item(key = "eng-${e.id}") {
+                        SectionHeader("${MeasureFlow.engTitle(room, e.id)} · ${e.label.removePrefix(e.type.title).trimStart(',', ' ')}", engColor(e.type)) {
+                            TextButton(onClick = { onEditEng(e) }) { Text("Изм.") }
+                            TextButton(onClick = { vm.startRouting(e.id) }) { Text("Трасса") }
+                            TextButton(onClick = { vm.deleteEngineering(e.id) }) { Text("Удал.") }
+                        }
                     }
                 }
             }
             item(key = t.toString()) {
-                val color = (t as? MeasureTarget.Wall)?.let { wallColor(it.index, room.walls.size) }
-                MeasureRow(room, t, color, selected = vm.dialogTarget == t, onClick = { vm.openDialog(t) })
+                MeasureRow(room, t, targetColor(room, t), selected = vm.dialogTarget == t, onClick = { vm.openDialog(t) })
             }
         }
         item {
@@ -185,9 +256,26 @@ private fun MeasureList(vm: MeasureViewModel, room: Room, modifier: Modifier) {
 }
 
 @Composable
+private fun SectionHeader(title: String, color: Color? = null, actions: @Composable () -> Unit) {
+    Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            title,
+            style = MaterialTheme.typography.titleSmall,
+            color = color ?: Color.Unspecified,
+            modifier = Modifier.weight(1f),
+        )
+        actions()
+    }
+}
+
+@Composable
 private fun MeasureRow(room: Room, target: MeasureTarget, color: Color?, selected: Boolean, onClick: () -> Unit) {
     val value = MeasureFlow.valueOf(room, target)
     val bg = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent
+    val label = when (target) {
+        is MeasureTarget.EngSegment -> "Участок ${target.index + 1}"
+        else -> MeasureFlow.label(room, target)
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -198,7 +286,7 @@ private fun MeasureRow(room: Room, target: MeasureTarget, color: Color?, selecte
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Box(Modifier.size(14.dp).background(color ?: Color.Transparent, CircleShape))
-        Text(MeasureFlow.label(room, target), modifier = Modifier.weight(1f), fontWeight = if (value == null) FontWeight.Bold else null)
+        Text(label, modifier = Modifier.weight(1f), fontWeight = if (value == null) FontWeight.Bold else null)
         Text(value?.display() ?: "ввести", color = if (value == null) MaterialTheme.colorScheme.primary else Color.Unspecified)
     }
 }
@@ -218,6 +306,9 @@ private fun StatsCard(room: Room) {
                     if (s.needsRecheck) "⚠ Контур не сходится на ${fmtMm(e)} — перемерьте стены" else "Контур сходится (расхождение ${fmtMm(e)})",
                     color = if (s.needsRecheck) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+            room.engineering.forEach { e ->
+                e.totalLength?.let { Text("${MeasureFlow.engTitle(room, e.id)}: всего ${fmtMm(it)}") }
             }
         }
     }

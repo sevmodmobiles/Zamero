@@ -1,6 +1,5 @@
 package app.zamero.ui
 
-import android.content.Intent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -33,7 +32,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.zamero.core.Geometry
 import app.zamero.core.Project
-import app.zamero.core.Report
 import app.zamero.core.Room
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -50,13 +48,8 @@ fun ProjectScreen(vm: MeasureViewModel, project: Project) {
                 navigationIcon = { TextButton(onClick = vm::closeProject) { Text("Назад") } },
                 title = { Text(project.address, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 actions = {
-                    TextButton(onClick = {
-                        val send = Intent(Intent.ACTION_SEND)
-                            .setType("text/plain")
-                            .putExtra(Intent.EXTRA_SUBJECT, "Обмер: ${project.address}")
-                            .putExtra(Intent.EXTRA_TEXT, Report.text(project))
-                        context.startActivity(Intent.createChooser(send, "Отправить обмер"))
-                    }) { Text("Отправить") }
+                    TextButton(onClick = { Export.shareDxf(context, project) }) { Text("DXF") }
+                    TextButton(onClick = { Export.shareText(context, project) }) { Text("Отчёт") }
                 },
             )
         },

@@ -6,6 +6,8 @@ sealed interface MeasureTarget {
     data object Height : MeasureTarget
     data class OpeningWidth(val index: Int) : MeasureTarget
     data class OpeningHeight(val index: Int) : MeasureTarget
+    /** Участок [index] инженерной линии [elementId]. */
+    data class EngSegment(val elementId: String, val index: Int) : MeasureTarget
 }
 
 /**
@@ -22,6 +24,7 @@ object MeasureFlow {
             add(MeasureTarget.OpeningWidth(it))
             add(MeasureTarget.OpeningHeight(it))
         }
+        room.engineering.forEach { e -> e.segments.indices.forEach { add(MeasureTarget.EngSegment(e.id, it)) } }
     }
 
     fun valueOf(room: Room, target: MeasureTarget): Measure? = when (target) {
@@ -29,6 +32,7 @@ object MeasureFlow {
         MeasureTarget.Height -> room.height
         is MeasureTarget.OpeningWidth -> room.openings.getOrNull(target.index)?.width
         is MeasureTarget.OpeningHeight -> room.openings.getOrNull(target.index)?.height
+        is MeasureTarget.EngSegment -> room.engineering.firstOrNull { it.id == target.elementId }?.segments?.getOrNull(target.index)
     }
 
     fun set(room: Room, target: MeasureTarget, value: Measure?): Room = when (target) {
@@ -36,6 +40,15 @@ object MeasureFlow {
         MeasureTarget.Height -> room.copy(height = value)
         is MeasureTarget.OpeningWidth -> room.updateOpening(target.index) { copy(width = value) }
         is MeasureTarget.OpeningHeight -> room.updateOpening(target.index) { copy(height = value) }
+        is MeasureTarget.EngSegment -> room.copy(
+            engineering = room.engineering.map { e ->
+                if (e.id == target.elementId && target.index in e.segments.indices) {
+                    e.copy(segments = e.segments.toMutableList().also { it[target.index] = value })
+                } else {
+                    e
+                }
+            },
+        )
     }
 
     /** Первое пустое поле после [current] (по кругу), или null, если всё измерено. */
@@ -58,6 +71,16 @@ object MeasureFlow {
         MeasureTarget.Height -> "Высота потолка"
         is MeasureTarget.OpeningWidth -> "${openingTitle(room, target.index)}: ширина"
         is MeasureTarget.OpeningHeight -> "${openingTitle(room, target.index)}: высота"
+        is MeasureTarget.EngSegment -> "${engTitle(room, target.elementId)}, участок ${target.index + 1}"
+    }
+
+    /** «Труба 2» — номер среди элементов того же типа. */
+    fun engTitle(room: Room, elementId: String): String {
+        val index = room.engineering.indexOfFirst { it.id == elementId }
+        if (index < 0) return "Элемент"
+        val type = room.engineering[index].type
+        val number = room.engineering.take(index + 1).count { it.type == type }
+        return "${type.title} $number"
     }
 
     fun openingTitle(room: Room, index: Int): String {

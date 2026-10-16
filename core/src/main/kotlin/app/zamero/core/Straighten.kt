@@ -39,6 +39,85 @@ object Straighten {
         return normalize(result)
     }
 
+    /**
+     * Незамкнутая трасса (труба, лоток, воздуховод). Углы выравниваются относительно
+     * [baseAngle] — направления первой стены помещения, чтобы трассы шли вдоль стен.
+     */
+    fun polyline(stroke: List<Point>, baseAngle: Double = 0.0): List<Point>? {
+        if (stroke.size < 2) return null
+        val diag = diagonal(stroke)
+        if (diag < 1e-6) return null
+
+        var pts = rdp(stroke, epsilon = diag * 0.05)
+        pts = removeNoiseOpen(pts, minEdge = diag * 0.08)
+        if (pts.size < 2) return null
+
+        val angles = pts.zipWithNext { a, b -> snapAngle(angleOf(a, b), baseAngle) }.toMutableList()
+        val points = pts.toMutableList()
+        // Соседние участки одного направления сливаем.
+        var i = 0
+        while (i < angles.size - 1) {
+            val diff = abs(normalizeRad(angles[i] - angles[i + 1]))
+            if (diff < 1e-6 || abs(diff - PI) < 1e-6) {
+                angles.removeAt(i + 1)
+                points.removeAt(i + 1)
+            } else {
+                i++
+            }
+        }
+        val edges = angles.indices.map { k -> Edge(angles[k], points[k], points[k + 1]) }
+        val result = ArrayList<Point>(edges.size + 1)
+        result += project(points.first(), edges.first())
+        for (k in 1 until edges.size) result += lineIntersection(edges[k - 1], edges[k]) ?: return null
+        result += project(points.last(), edges.last())
+        return result
+    }
+
+    /** Угол [angle], доведённый до кратного 90° (или 45°) относительно [base]. */
+    fun snapAngle(angle: Double, base: Double): Double {
+        val rel = normalizeRad(angle - base)
+        val right = (rel / (PI / 2)).roundToInt() * (PI / 2)
+        val snapped = if (abs(rel - right) < Math.toRadians(RIGHT_ANGLE_SNAP_DEG)) right else (rel / (PI / 4)).roundToInt() * (PI / 4)
+        return normalizeRad(base + snapped)
+    }
+
+    private fun project(p: Point, e: Edge): Point {
+        val dx = cosClean(e.angle)
+        val dy = sinClean(e.angle)
+        val m = e.mid
+        val t = (p.x - m.x) * dx + (p.y - m.y) * dy
+        return Point(m.x + t * dx, m.y + t * dy)
+    }
+
+    private fun removeNoiseOpen(input: List<Point>, minEdge: Double): List<Point> {
+        val pts = input.toMutableList()
+        var changed = true
+        while (changed && pts.size >= 3) {
+            changed = false
+            for (i in 0 until pts.size - 1) {
+                if (dist(pts[i], pts[i + 1]) < minEdge) {
+                    // Концы трассы не двигаем: стягиваем к концу, а не к середине.
+                    when (i) {
+                        0 -> pts.removeAt(1)
+                        pts.size - 2 -> pts.removeAt(pts.size - 2)
+                        else -> { pts[i] = mid(pts[i], pts[i + 1]); pts.removeAt(i + 1) }
+                    }
+                    changed = true
+                    break
+                }
+            }
+            if (changed) continue
+            for (i in 1 until pts.size - 1) {
+                if (abs(turnDeg(pts[i - 1], pts[i], pts[i + 1])) < COLLINEAR_DEG) {
+                    pts.removeAt(i)
+                    changed = true
+                    break
+                }
+            }
+        }
+        return pts
+    }
+
     // --- 1. Упрощение -------------------------------------------------------
 
     private fun simplifyClosed(stroke: List<Point>, epsilon: Double): List<Point> {
@@ -113,16 +192,7 @@ object Straighten {
         val toAxis = (base / (PI / 2)).roundToInt() * (PI / 2)
         if (abs(base - toAxis) < Math.toRadians(AXIS_SNAP_DEG)) base = toAxis
 
-        var edges = raw.map { (a, b) ->
-            val rel = normalizeRad(angleOf(a, b) - base)
-            val right = (rel / (PI / 2)).roundToInt() * (PI / 2)
-            val snapped = if (abs(rel - right) < Math.toRadians(RIGHT_ANGLE_SNAP_DEG)) {
-                right
-            } else {
-                (rel / (PI / 4)).roundToInt() * (PI / 4)
-            }
-            Edge(normalizeRad(base + snapped), a, b)
-        }
+        var edges = raw.map { (a, b) -> Edge(snapAngle(angleOf(a, b), base), a, b) }
 
         // Соседние стены одного направления сливаем, встречные «шипы» убираем.
         var changed = true

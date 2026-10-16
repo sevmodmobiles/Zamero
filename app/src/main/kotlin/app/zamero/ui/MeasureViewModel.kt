@@ -6,6 +6,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import app.zamero.core.EngElement
+import app.zamero.core.EngType
 import app.zamero.core.Measure
 import app.zamero.core.MeasureFlow
 import app.zamero.core.MeasureTarget
@@ -40,6 +42,14 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     var dialogTarget by mutableStateOf<MeasureTarget?>(null)
         private set
     var lastLaser by mutableStateOf<LaserReading?>(null)
+        private set
+    /** Элемент инженерии, для которого сейчас рисуется трасса. */
+    var routingElementId by mutableStateOf<String?>(null)
+        private set
+
+    /** История для «Отменить»: предыдущие состояния всех объектов. */
+    private val history = ArrayDeque<List<Project>>()
+    var canUndo by mutableStateOf(false)
         private set
 
     var update by mutableStateOf<Updater.Release?>(null)
@@ -107,6 +117,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     fun closeRoom() {
+        cancelRouting()
         openRoomId = null
         dialogTarget = null
     }
@@ -151,6 +162,56 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     fun removeOpening(index: Int) {
         dialogTarget = null
         editRoom { copy(openings = openings.filterIndexed { i, _ -> i != index }) }
+    }
+
+    // --- Инженерия ------------------------------------------------------------
+
+    /** Добавляет элемент и сразу переходит к рисованию его трассы. */
+    fun addEngineering(type: EngType, params: EngParams) {
+        val e = params.applyTo(EngElement(id = UUID.randomUUID().toString(), type = type))
+        editRoom { copy(engineering = engineering + e) }
+        routingElementId = e.id
+    }
+
+    fun editEngineering(id: String, params: EngParams) = editElement(id) { params.applyTo(this) }
+
+    fun deleteEngineering(id: String) {
+        if (routingElementId == id) routingElementId = null
+        val target = dialogTarget
+        if (target is MeasureTarget.EngSegment && target.elementId == id) dialogTarget = null
+        editRoom { copy(engineering = engineering.filterNot { it.id == id }) }
+    }
+
+    fun startRouting(id: String) {
+        routingElementId = id
+    }
+
+    fun cancelRouting() {
+        val id = routingElementId ?: return
+        routingElementId = null
+        // Элемент без трассы, который только что добавили, не нужен.
+        if (openRoom?.engineering?.firstOrNull { it.id == id }?.hasRoute == false) deleteEngineering(id)
+    }
+
+    /** Трасса в координатах эскиза помещения. */
+    fun setRoute(id: String, points: List<Point>) {
+        editElement(id) { withRoute(points) }
+        routingElementId = null
+    }
+
+    private fun editElement(id: String, block: EngElement.() -> EngElement) =
+        editRoom { copy(engineering = engineering.map { if (it.id == id) it.block() else it }) }
+
+    // --- Отмена --------------------------------------------------------------
+
+    fun undo() {
+        val previous = history.removeLastOrNull() ?: return
+        canUndo = history.isNotEmpty()
+        projects = previous
+        dialogTarget = null
+        routingElementId = null
+        if (openProject == null) closeProject()
+        viewModelScope.launch(Dispatchers.IO) { store.save(previous) }
     }
 
     // --- Обновление ----------------------------------------------------------
@@ -201,6 +262,9 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     private fun saveProjects(list: List<Project>) {
+        history.addLast(projects)
+        if (history.size > HISTORY_SIZE) history.removeFirst()
+        canUndo = true
         projects = list
         viewModelScope.launch(Dispatchers.IO) { store.save(list) }
     }
@@ -208,4 +272,25 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     override fun onCleared() {
         laser.disconnect()
     }
+
+    private companion object {
+        const val HISTORY_SIZE = 50
+    }
+}
+
+/** Параметры инженерной линии из окна ввода. */
+data class EngParams(
+    val diameterMm: Int?,
+    val widthMm: Int?,
+    val heightMm: Int?,
+    val elevationMm: Int?,
+    val note: String,
+) {
+    fun applyTo(e: EngElement) = e.copy(
+        diameterMm = diameterMm,
+        widthMm = widthMm,
+        heightMm = heightMm,
+        elevationMm = elevationMm,
+        note = note,
+    )
 }
