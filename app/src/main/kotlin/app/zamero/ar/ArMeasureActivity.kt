@@ -193,6 +193,9 @@ class ArMeasureActivity : ComponentActivity() {
                     }
                     else -> {
                         Text(hint(frameState), color = Color.White)
+                        frameState.range?.takeIf { it > MAX_GOOD_RANGE_M }?.let {
+                            Text("Подойдите ближе: дальше ${MAX_GOOD_RANGE_M.toInt()} м точность заметно падает", color = Color(0xFFFFB74D))
+                        }
                         frameState.liveDistance?.let {
                             Text(meters(it), color = Color.White, style = MaterialTheme.typography.displaySmall)
                         }
@@ -204,8 +207,8 @@ class ArMeasureActivity : ComponentActivity() {
                             }
                             Button(
                                 onClick = { renderer.request(ArRenderer.Action.PLACE) },
-                                enabled = frameState.tracking && frameState.onSurface,
-                            ) { Text(if (frameState.startPlaced) "Конец" else "Начало") }
+                                enabled = frameState.tracking && frameState.onSurface && !frameState.sampling,
+                            ) { Text(if (frameState.sampling) "Замер…" else if (frameState.startPlaced) "Конец" else "Начало") }
                         }
                     }
                 }
@@ -225,8 +228,9 @@ class ArMeasureActivity : ComponentActivity() {
     }
 
     private fun hint(s: ArFrameState): String = when {
+        s.sampling -> "Держите телефон неподвижно…"
         !s.tracking -> "Медленно поводите телефоном, чтобы камера «увидела» помещение"
-        !s.onSurface -> "Наведите прицел на пол или стену"
+        !s.onSurface -> "Наведите прицел на пол или стену. Если поверхность не находится — поводите телефоном, гладкие однотонные стены камера видит плохо"
         !s.startPlaced -> "Наведите прицел на начало отрезка и нажмите «Начало»"
         else -> "Наведите прицел на конец отрезка и нажмите «Конец»"
     }
@@ -243,5 +247,6 @@ class ArMeasureActivity : ComponentActivity() {
 
     companion object {
         private const val EXTRA_METERS = "meters"
+        private const val MAX_GOOD_RANGE_M = 3.0
     }
 }

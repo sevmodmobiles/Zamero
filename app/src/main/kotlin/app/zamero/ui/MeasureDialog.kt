@@ -109,7 +109,7 @@ fun MeasureDialog(
                     Text("Дальномер не подключён", style = MaterialTheme.typography.bodySmall)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    TextButton(onClick = { camera.launch(Unit) }) { Text("Камерой") }
+                    TextButton(onClick = { camera.launch(Unit) }) { Text("Камерой ≈") }
                     if (current != null) {
                         TextButton(onClick = { onSave(null, Source.MANUAL, false) }) {
                             Text("Стереть", color = MaterialTheme.colorScheme.error)
