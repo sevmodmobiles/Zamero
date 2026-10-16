@@ -73,10 +73,14 @@ object Dxf {
                 }
                 text(offsetX, height + 500, TEXT_MM, title, "TEXT")
 
-                // Стены одной полилинией.
-                polyline(plan.vertices.map(::tx), closed = true, layer = "WALLS")
+                // Стены одной полилинией; при разрывах — каждая уцелевшая стена отдельно.
+                if (room.isClosed) {
+                    polyline(plan.vertices.map(::tx), closed = true, layer = "WALLS")
+                } else {
+                    plan.walls.filter { room.hasWall(it.index) }.forEach { polyline(listOf(tx(it.a), tx(it.b)), closed = false, layer = "WALLS") }
+                }
                 // Размеры стен.
-                plan.walls.forEach { wall ->
+                plan.walls.filter { room.hasWall(it.index) }.forEach { wall ->
                     val a = tx(wall.a)
                     val b = tx(wall.b)
                     val mid = Point((a.x + b.x) / 2, (a.y + b.y) / 2)

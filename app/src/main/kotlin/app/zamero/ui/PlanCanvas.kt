@@ -308,6 +308,7 @@ fun PlanCanvas(
                             }
                         }
                         if (!engineeringStage) w.forEachIndexed { i, (a, b) ->
+                            if (!room.hasWall(i)) return@forEachIndexed
                             val d = distanceToSegment(pos, a, b)
                             if (d < bestDist) { bestDist = d; best = MeasureTarget.Wall(i) }
                         }
@@ -365,7 +366,7 @@ fun PlanCanvas(
                     if (!engineeringStage) {
                         // Стены контура тоже стираются (контур при этом остаётся замкнутым).
                         current.first.forEachIndexed { i, (a, b) ->
-                            if (insidePolygon(Offset((a.x + b.x) / 2, (a.y + b.y) / 2), loop)) {
+                            if (room.hasWall(i) && insidePolygon(Offset((a.x + b.x) / 2, (a.y + b.y) / 2), loop)) {
                                 picked += EraseHit.Segment(MeasureTarget.Wall(i))
                             }
                         }
@@ -406,11 +407,13 @@ fun PlanCanvas(
             drawGrid(outlineColor)
             val n = walls.size
             walls.forEachIndexed { i, (a, b) ->
+                if (!shown.hasWall(i)) return@forEachIndexed // стёртая стена — разрыв
                 val sel = selected == MeasureTarget.Wall(i)
                 drawLine(wallColor(i, n).copy(alpha = wallAlpha), a, b, (if (sel) 9.dp else 5.dp).toPx(), StrokeCap.Round)
             }
             if (!engineeringStage) {
                 walls.forEachIndexed { i, (a, b) ->
+                    if (!shown.hasWall(i)) return@forEachIndexed
                     val text = shown.walls.getOrNull(i)?.let { "${i + 1}: ${it.millimeters}" } ?: "${i + 1}"
                     label(measurer, text, wallColor(i, n), a, b, outward = true, labelBg)
                 }

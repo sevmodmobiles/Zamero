@@ -20,7 +20,7 @@ sealed interface MeasureTarget {
 object MeasureFlow {
 
     fun targets(room: Room): List<MeasureTarget> = buildList {
-        room.walls.indices.forEach { add(MeasureTarget.Wall(it)) }
+        room.walls.indices.filter(room::hasWall).forEach { add(MeasureTarget.Wall(it)) }
         add(MeasureTarget.Height)
         room.openings.indices.forEach {
             add(MeasureTarget.OpeningWidth(it))

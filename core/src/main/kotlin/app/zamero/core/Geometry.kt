@@ -26,7 +26,8 @@ object Geometry {
 
     fun stats(room: Room): RoomStats {
         val lengths = room.walls.map { it?.meters }
-        val complete = room.hasOutline && lengths.all { it != null }
+        // Площадь и периметр — только у замкнутого контура со всеми замерами.
+        val complete = room.hasOutline && room.isClosed && lengths.all { it != null }
         val perimeter = if (complete) lengths.sumOf { it!! } else null
 
         var floorArea: Double? = null

@@ -64,6 +64,7 @@ class ProjectStore(context: Context) {
         )
         .put("engineering", JSONArray(engineering.map { it.toJson() }))
         .put("columns", JSONArray(columns.map { it.toJson() }))
+        .put("removedWalls", JSONArray(removedWalls.sorted()))
 
     private fun Column.toJson() = JSONObject()
         .put("id", id)
@@ -163,6 +164,8 @@ class ProjectStore(context: Context) {
             },
             engineering = optJSONArray("engineering")?.objects()?.map { it.toEng() } ?: emptyList(),
             columns = optJSONArray("columns")?.objects()?.map { it.toColumn() } ?: emptyList(),
+            removedWalls = optJSONArray("removedWalls")?.let { arr -> List(arr.length()) { arr.getInt(it) } }
+                ?.filter { it in 0 until outline.size }?.toSet() ?: emptySet(),
         )
     }
 

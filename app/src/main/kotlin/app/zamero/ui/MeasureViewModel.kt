@@ -283,7 +283,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     fun eraseMany(segments: Set<Pair<String, Int>>, columnIds: Set<String>, walls: Set<Int> = emptySet()): Boolean {
         val room = openRoom ?: return false
         // Стены контура — сначала (по номерам), потом линии и колонны (по id).
-        val withoutWalls = if (walls.isEmpty()) room else Edit.deleteWalls(Edit.rebase(room), walls) ?: return false
+        val withoutWalls = if (walls.isEmpty()) room else Edit.deleteWalls(room, walls)
         dialogTarget = null
         replaceRoom(
             Edit.deleteSegments(withoutWalls, segments) { UUID.randomUUID().toString() }

@@ -159,6 +159,8 @@ private fun RoomCard(room: Room, onOpen: () -> Unit, onDelete: () -> Unit) {
                 Text(
                     if (!room.hasOutline) {
                         "Контур не нарисован"
+                    } else if (!room.isClosed) {
+                        "Контур не замкнут"
                     } else {
                         stats.floorArea?.let(::fmtArea) ?: "Измерено стен: $measured из ${room.walls.size}"
                     },

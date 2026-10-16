@@ -20,7 +20,8 @@ object Report {
         project.rooms.forEach { room ->
             val s = Geometry.stats(room)
             appendLine("■ ${room.name}")
-            room.walls.forEachIndexed { i, w -> appendLine("  Стена ${i + 1}: ${w.fmt()}") }
+            room.walls.forEachIndexed { i, w -> if (room.hasWall(i)) appendLine("  Стена ${i + 1}: ${w.fmt()}") }
+            if (!room.isClosed) appendLine("  Контур не замкнут (стёрты стены ${room.removedWalls.sorted().joinToString { "${it + 1}" }})")
             appendLine("  Высота: ${room.height.fmt()}")
             room.openings.indices.forEach { i ->
                 val o = room.openings[i]

@@ -42,6 +42,8 @@ data class Room(
     /** Инженерные линии, привязанные к плану этого помещения. */
     val engineering: List<EngElement> = emptyList(),
     val columns: List<Column> = emptyList(),
+    /** Стёртые стены контура — на их месте разрыв. */
+    val removedWalls: Set<Int> = emptySet(),
 ) {
     init {
         require(walls.size == outline.size) { "walls.size must match outline" }
@@ -49,9 +51,21 @@ data class Room(
 
     val hasOutline: Boolean get() = outline.size >= 3
 
+    /** Контур без разрывов — только тогда считается площадь. */
+    val isClosed: Boolean get() = removedWalls.isEmpty()
+
+    /** Стена контура на месте (не стёрта). */
+    fun hasWall(i: Int): Boolean = i !in removedWalls
+
     /** Новый контур: замеры стен сохраняем, только если число стен не изменилось. */
-    fun withOutline(points: List<Point>): Room =
-        copy(outline = points, walls = if (points.size == walls.size) walls else List(points.size) { null })
+    fun withOutline(points: List<Point>): Room {
+        val same = points.size == walls.size
+        return copy(
+            outline = points,
+            walls = if (same) walls else List(points.size) { null },
+            removedWalls = if (same) removedWalls else emptySet(),
+        )
+    }
 }
 
 /** Объект обмера: адрес, заказчик, исполнитель и помещения. */

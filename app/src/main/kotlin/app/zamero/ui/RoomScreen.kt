@@ -596,7 +596,7 @@ private fun straightenAndSnap(room: Room, plan: Plan.RoomPlan, stroke: List<Poin
     val w0 = plan.walls.first()
     val base = atan2(w0.b.y - w0.a.y, w0.b.x - w0.a.x)
     val line = Straighten.polyline(stroke, base) ?: return null
-    val targets = plan.walls.map { it.a to it.b } +
+    val targets = plan.walls.filter { room.hasWall(it.index) }.map { it.a to it.b } +
         room.engineering.filter { it.hasRoute && it.id != excludeId }.flatMap { e -> Plan.route(room, plan, e).zipWithNext() }
     val xs = plan.vertices.map { it.x }
     val ys = plan.vertices.map { it.y }
@@ -650,7 +650,8 @@ private fun summary(room: Room, engineering: Boolean): String {
         return if (all.isEmpty()) "Нажмите «Проложить трассу» и проведите линию по плану"
         else if (left == 0) "Все участки трасс измерены" else "Не измерено участков: $left из ${all.size} · нажмите на трассу"
     }
-    val area = Geometry.stats(room).floorArea?.let { "Площадь ${fmtArea(it)} · " } ?: ""
+    val area = Geometry.stats(room).floorArea?.let { "Площадь ${fmtArea(it)} · " }
+        ?: if (!room.isClosed) "Контур не замкнут · " else ""
     return area + if (left == 0) "всё измерено" else "осталось измерить: $left из ${all.size} · нажмите на стену"
 }
 
@@ -768,7 +769,7 @@ private fun StatsCard(room: Room, engineering: Boolean) {
                 }
                 return@Column
             }
-            Text("Площадь пола: ${s.floorArea?.let(::fmtArea) ?: "—"}")
+            Text("Площадь пола: ${s.floorArea?.let(::fmtArea) ?: if (!room.isClosed) "— (контур не замкнут)" else "—"}")
             Text("Периметр: ${s.perimeter?.let(::fmtMm) ?: "—"}")
             Text("Площадь стен без проёмов: ${s.wallAreaNet?.let(::fmtArea) ?: "—"}")
             Text("Объём: ${s.volume?.let { "%.2f м³".format(Locale.ROOT, it) } ?: "—"}")

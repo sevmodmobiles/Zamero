@@ -4,6 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class EditTest {
     private fun m(v: Double) = Measure(v, Source.LASER)
@@ -116,35 +117,15 @@ class EditTest {
     }
 
     @Test
-    fun `several contour walls in a row become one straight wall`() {
-        // Прямоугольник 5×3 с выступом снизу вверх на стенах 1–3.
-        val outline = listOf(
-            Point(0.0, 0.0), Point(2.0, 0.0), Point(2.0, 1.0), Point(3.0, 1.0), Point(3.0, 0.0),
-            Point(5.0, 0.0), Point(5.0, 3.0), Point(0.0, 3.0),
-        )
-        val r = Room("r", "Зал").withOutline(outline)
-        val out = assertNotNull(Edit.deleteWalls(r, setOf(1, 2, 3)))
-        assertEquals(listOf(Point(0.0, 0.0), Point(5.0, 0.0), Point(5.0, 3.0), Point(0.0, 3.0)), out.outline)
-        assertEquals(4, out.walls.size)
-    }
-
-    @Test
-    fun `single wall is removed by extending neighbours`() {
-        // Срезанный угол (стена 1) — восстанавливается прямой угол.
-        val outline = listOf(Point(0.0, 0.0), Point(3.0, 0.0), Point(4.0, 1.0), Point(4.0, 3.0), Point(0.0, 3.0))
-        val r = Room("r", "Зал", outline, walls = listOf(m(3.0), m(1.4), m(2.0), m(4.0), m(3.0)))
-        val out = assertNotNull(Edit.deleteWalls(r, setOf(1)))
-        assertEquals(4, out.outline.size)
-        assertNear(Point(4.0, 0.0), out.outline[1])
-        // Стены, изменившие длину, сброшены; нетронутые — сохранены.
-        assertNull(out.walls[0])
-        assertNull(out.walls[1])
-        assertEquals(4.0, out.walls[2]!!.meters)
-    }
-
-    @Test
-    fun `contour cannot drop below three walls`() {
-        assertNull(Edit.deleteWalls(room(), setOf(0, 1, 2)))
-        assertNull(Edit.deleteWalls(room(), setOf(1, 3)))
+    fun `erased contour walls leave a gap`() {
+        val r = Edit.deleteWalls(room(), setOf(1))
+        assertEquals(setOf(1), r.removedWalls)
+        assertEquals(4, r.outline.size) // соседние стены не тронуты
+        assertNull(Geometry.stats(r).floorArea) // контур не замкнут — площади нет
+        assertEquals(listOf(MeasureTarget.Wall(0), MeasureTarget.Wall(2), MeasureTarget.Wall(3)), MeasureFlow.targets(r).take(3))
+        val dxf = Dxf.build(Project("p", "А", rooms = listOf(r))).split("\r\n")
+        // Стены — отдельными линиями (3 уцелевшие) + перегородка из room().
+        assertEquals(3 + 1, dxf.count { it == "POLYLINE" })
+        assertTrue("Контур не замкнут (стёрты стены 2)" in Report.text(Project("p", "А", rooms = listOf(r))))
     }
 }
