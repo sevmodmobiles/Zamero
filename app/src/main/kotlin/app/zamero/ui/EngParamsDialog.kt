@@ -97,11 +97,13 @@ fun EngParamsDialog(
                 } else {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedTextField(
-                            width, { width = digits(it) }, label = { Text("Ширина") }, singleLine = true,
+                            width, { width = digits(it) }, label = { Text("Ширина, мм") }, singleLine = true,
+                            supportingText = { Text("на плане") },
                             keyboardOptions = numbers, modifier = Modifier.weight(1f),
                         )
                         OutlinedTextField(
-                            height, { height = digits(it) }, label = { Text("Высота") }, singleLine = true,
+                            height, { height = digits(it) }, label = { Text("Высота, мм") }, singleLine = true,
+                            supportingText = { Text("в свойствах") },
                             keyboardOptions = numbers, modifier = Modifier.weight(1f),
                         )
                     }
@@ -126,7 +128,13 @@ fun EngParamsDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = {
+            // Сечение инженерной линии обязательно: от него зависит ширина на плане.
+            val sectionOk = when (type.section) {
+                Section.ROUND -> (diameter.toIntOrNull() ?: 0) > 0
+                Section.RECT -> (width.toIntOrNull() ?: 0) > 0 && (height.toIntOrNull() ?: 0) > 0
+                Section.NONE -> true
+            }
+            TextButton(enabled = sectionOk, onClick = {
                 onSave(
                     EngParams(
                         diameterMm = diameter.toIntOrNull(),

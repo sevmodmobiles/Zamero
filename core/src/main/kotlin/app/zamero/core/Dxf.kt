@@ -95,8 +95,16 @@ object Dxf {
                 }
                 // Инженерия на своих слоях.
                 room.engineering.filter { it.hasRoute }.forEach { e ->
-                    val pts = Plan.route(room, plan, e).map(::tx)
-                    polyline(pts, closed = false, layer = e.type.layer)
+                    val meters = Plan.route(room, plan, e)
+                    val pts = meters.map(::tx)
+                    val w = Footprint.width(e)
+                    if (w != null) {
+                        // Проекция на пол в реальную ширину, ось — на слое осей.
+                        polyline(Footprint.outline(meters, w).map(::tx), closed = true, layer = e.type.layer)
+                        polyline(pts, closed = false, layer = "AXES")
+                    } else {
+                        polyline(pts, closed = false, layer = e.type.layer)
+                    }
                     val a = pts[0]
                     val b = pts[1]
                     text((a.x + b.x) / 2, (a.y + b.y) / 2 + 60, SMALL_TEXT_MM, e.label, e.type.layer)

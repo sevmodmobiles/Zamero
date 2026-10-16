@@ -51,6 +51,7 @@ import app.zamero.core.Columns
 import app.zamero.core.Edit
 import app.zamero.core.EngElement
 import app.zamero.core.EngType
+import app.zamero.core.Footprint
 import app.zamero.core.MeasureTarget
 import app.zamero.core.Plan
 import app.zamero.core.Point
@@ -190,9 +191,15 @@ fun PlanCanvas(
     val toScreen: (Point) -> Offset = { p -> view.toScreen(Point(p.x + delta.x, p.y + delta.y)) }
 
     val walls = plan?.walls?.map { toScreen(it.a) to toScreen(it.b) } ?: emptyList()
-    val routes = if (plan == null) emptyList() else shown.engineering
+    val routesMeters = if (plan == null) emptyList() else shown.engineering
         .filter { it.hasRoute && visible(it) }
-        .map { e -> e to Plan.route(shown, plan, e).map(toScreen) }
+        .map { e -> e to Plan.route(shown, plan, e) }
+    val routes = routesMeters.map { (e, pts) -> e to pts.map(toScreen) }
+    // Проекция на пол в реальную ширину (лотки, воздуховоды, трубы, стены с толщиной).
+    val footprints = routesMeters.mapNotNull { (e, pts) ->
+        Footprint.width(e)?.let { w -> e to Footprint.outline(pts, w).map(toScreen) }
+    }.toMap()
+    val pxPerMeter = view.metersPerPx().let { if (it > 0) 1.0 / it else 0.0 }
     val columns = if (plan == null) emptyList() else shown.columns.map { it to Columns.plan(shown, plan, it) }
     val allPoints = if (plan == null) emptyList() else Edit.points(shown, ::visible).map { it.first to toScreen(it.second) }
     val handles = allPoints.filter { draggable(it.first) }
@@ -204,6 +211,7 @@ fun PlanCanvas(
     val currentPoints by rememberUpdatedState(allPoints)
     val toolState by rememberUpdatedState(tool)
     val snapState by rememberUpdatedState(snapMeters)
+    val pxPerMeterState by rememberUpdatedState(pxPerMeter)
     val onColumnTapState by rememberUpdatedState(onColumnTap)
     val onOutlineState by rememberUpdatedState(onOutline)
     val onRouteState by rememberUpdatedState(onRoute)
@@ -271,8 +279,10 @@ fun PlanCanvas(
                         var bestDist = hitRadius
                         // Инженерия лежит поверх стен — проверяем её первой и с небольшим приоритетом.
                         r.filter { isActive(it.first) }.forEach { (e, pts) ->
+                            // Внутри полосы трассы — тоже попадание.
+                            val half = ((Footprint.width(e) ?: 0.0) / 2 * pxPerMeterState).toFloat()
                             for (i in 0 until pts.size - 1) {
-                                val d = distanceToSegment(pos, pts[i], pts[i + 1]) * 0.8f
+                                val d = (distanceToSegment(pos, pts[i], pts[i + 1]) - half).coerceAtLeast(0f) * 0.8f
                                 if (d < bestDist) { bestDist = d; best = MeasureTarget.EngSegment(e.id, i) }
                             }
                         }
@@ -350,9 +360,28 @@ fun PlanCanvas(
                     EngType.LINE -> 2.dp
                     else -> 4.dp
                 }
-                for (i in 0 until pts.size - 1) {
-                    val sel = selected == MeasureTarget.EngSegment(e.id, i)
-                    drawLine(color, pts[i], pts[i + 1], (if (sel) width + 4.dp else width).toPx(), StrokeCap.Round, dash)
+                val band = footprints[e]
+                if (band != null && band.size >= 4) {
+                    val path = Path().apply {
+                        moveTo(band[0].x, band[0].y)
+                        band.drop(1).forEach { lineTo(it.x, it.y) }
+                        close()
+                    }
+                    drawPath(path, color.copy(alpha = color.alpha * 0.3f))
+                    drawPath(path, color, style = Stroke(1.5.dp.toPx(), pathEffect = dash))
+                    // Ось и выделенный участок.
+                    for (i in 0 until pts.size - 1) {
+                        val sel = selected == MeasureTarget.EngSegment(e.id, i)
+                        drawLine(
+                            color, pts[i], pts[i + 1], (if (sel) 4.dp else 1.dp).toPx(),
+                            pathEffect = if (sel) null else PathEffect.dashPathEffect(floatArrayOf(12f, 6f, 3f, 6f)),
+                        )
+                    }
+                } else {
+                    for (i in 0 until pts.size - 1) {
+                        val sel = selected == MeasureTarget.EngSegment(e.id, i)
+                        drawLine(color, pts[i], pts[i + 1], (if (sel) width + 4.dp else width).toPx(), StrokeCap.Round, dash)
+                    }
                 }
                 if (active) for (i in 0 until pts.size - 1) {
                     val len = e.segments.getOrNull(i)?.millimeters

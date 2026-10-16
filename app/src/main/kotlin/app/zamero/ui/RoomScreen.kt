@@ -366,9 +366,26 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
             title = { Text(if (eng) "Что прокладываем?" else "Что дорисовали?") },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
-                    run {
-                        val category = if (eng) Category.ENGINEERING else Category.CONSTRUCTION
-                        EngType.entries.filter { it.category == category }.forEach { type ->
+                    // Инженерия — по группам: лотки, вентиляция, трубы.
+                    val groups = if (eng) {
+                        listOf(
+                            "Лотки" to listOf(EngType.TRAY),
+                            "Вентиляция" to listOf(EngType.DUCT_RECT, EngType.DUCT_ROUND),
+                            "Трубы" to listOf(EngType.PIPE, EngType.DRAIN),
+                        )
+                    } else {
+                        listOf("" to EngType.entries.filter { it.category == Category.CONSTRUCTION })
+                    }
+                    groups.forEach { (header, types) ->
+                        if (header.isNotEmpty()) {
+                            Text(
+                                header,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
+                            )
+                        }
+                        types.forEach { type ->
                             Row(
                                 Modifier.fillMaxWidth().clickable { extraType = type }.padding(vertical = 9.dp),
                                 verticalAlignment = Alignment.CenterVertically,

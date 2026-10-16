@@ -32,8 +32,8 @@ class DxfTest {
         assertEquals("EOF", lines[lines.size - 2])
         assertEquals(lines.count { it == "SECTION" }, lines.count { it == "ENDSEC" })
         assertEquals(lines.count { it == "POLYLINE" }, lines.count { it == "SEQEND" })
-        // Стены + один воздуховод; комната без контура пропущена.
-        assertEquals(2, lines.count { it == "POLYLINE" })
+        // Стены + воздуховод (контур в реальную ширину и ось); комната без контура пропущена.
+        assertEquals(3, lines.count { it == "POLYLINE" })
         assertTrue("DUCT_RECT" in lines)
     }
 
