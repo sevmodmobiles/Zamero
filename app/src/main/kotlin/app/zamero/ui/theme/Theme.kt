@@ -7,7 +7,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-private val Teal = Color(0xFF00897B)
+private val Teal = Color(0xFF00796B)
 private val TealLight = Color(0xFF4DB6AC)
 
 @Composable

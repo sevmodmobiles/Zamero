@@ -3,6 +3,14 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -14,11 +22,30 @@ jobs:
           distribution: temurin
           java-version: 17
       - uses: gradle/actions/setup-gradle@v4
+
       - name: Unit tests (core)
         run: ./gradlew :core:test
+
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug
+
+      - name: Rename APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk zamero-${{ github.run_number }}.apk
+
       - uses: actions/upload-artifact@v4
         with:
-          name: zamero-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          name: zamero-apk
+          path: zamero-*.apk
+
+      # Последняя сборка всегда лежит в релизе «latest» — APK можно скачать прямо на телефон.
+      - name: Publish "latest" release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --cleanup-tag --yes || true
+          gh release create latest zamero-${{ github.run_number }}.apk \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "Замеро — сборка ${{ github.run_number }}" \
+            --notes "Ветка: ${GITHUB_REF_NAME}, коммит: ${GITHUB_SHA::7}. Отладочная сборка: установите APK, разрешив установку из неизвестных источников."

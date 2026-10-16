@@ -1,46 +1,59 @@
 package app.zamero.core
 
-/** Тип помещения. */
-enum class PropertyType(val title: String) {
-    APARTMENT("Квартира"),
-    ROOM("Комната"),
-    HOUSE("Дом"),
-    COMMERCIAL("Коммерческое"),
+/** Откуда взялось значение — важно для доверия к замеру. */
+enum class Source(val title: String) {
+    MANUAL("вручную"),
+    LASER("рулетка"),
+    CAMERA("камера"),
 }
 
-/** Помещение, которое человек отдаёт в обмен («Что у меня есть»). */
-data class Property(
-    val type: PropertyType,
-    val city: String,
-    val district: String,
-    val rooms: Int,
-    val areaSqm: Double,
-    /** Оценочная стоимость в рублях — из неё считаются доплаты. */
-    val estimatedValue: Long,
+/** Одно измеренное расстояние в метрах. */
+data class Measure(val meters: Double, val source: Source)
+
+/** Поворот на углу помещения при обходе по часовой стрелке. */
+enum class Turn { RIGHT, LEFT }
+
+/** Форма помещения: стены по порядку обхода и поворот после каждой стены (все углы 90°). */
+enum class Shape(val title: String, val turns: List<Turn>) {
+    RECTANGLE("Прямоугольник", List(4) { Turn.RIGHT }),
+    L_SHAPE("Г-образная", listOf(Turn.RIGHT, Turn.RIGHT, Turn.RIGHT, Turn.LEFT, Turn.RIGHT, Turn.RIGHT)),
+    ;
+
+    val wallCount: Int get() = turns.size
+}
+
+enum class OpeningType(val title: String) {
+    WINDOW("Окно"),
+    DOOR("Дверь"),
+}
+
+/** Проём в стене: окно или дверь. */
+data class Opening(
+    val type: OpeningType,
+    val width: Measure? = null,
+    val height: Measure? = null,
 )
 
-/**
- * Что человек хочет получить («Что я ищу»). Пустое множество означает «любой».
- *
- * [maxExtraPayment] — сколько человек готов доплатить в рублях. Отрицательное
- * значение означает, что он сам хочет получить не меньше |maxExtraPayment|
- * (например, при переезде в меньшую квартиру).
- */
-data class Wish(
-    val city: String,
-    val types: Set<PropertyType> = emptySet(),
-    /** Районы в порядке предпочтения; пустой список — любой район. */
-    val districts: List<String> = emptyList(),
-    val roomsMin: Int = 0,
-    val roomsMax: Int = Int.MAX_VALUE,
-    val areaMinSqm: Double = 0.0,
-    val maxExtraPayment: Long = 0,
-)
-
-/** Объявление: что есть + что нужно. */
-data class Listing(
+data class Room(
     val id: String,
-    val ownerName: String,
-    val have: Property,
-    val want: Wish,
+    val name: String,
+    val shape: Shape = Shape.RECTANGLE,
+    /** Длины стен в порядке обхода; null — ещё не измерена. */
+    val walls: List<Measure?> = List(shape.wallCount) { null },
+    val height: Measure? = null,
+    val openings: List<Opening> = emptyList(),
+) {
+    init {
+        require(walls.size == shape.wallCount) { "walls.size must match shape" }
+    }
+
+    fun withShape(newShape: Shape): Room =
+        copy(shape = newShape, walls = List(newShape.wallCount) { walls.getOrNull(it) })
+}
+
+/** Объект обмера (квартира, офис) — набор помещений. */
+data class Project(
+    val id: String,
+    val name: String,
+    val rooms: List<Room> = emptyList(),
 )
