@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -24,6 +23,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -68,6 +68,7 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
     var engMenu by remember { mutableStateOf(false) }
     var engEdit by remember { mutableStateOf<EngEdit?>(null) }
     var redrawing by remember(room.id) { mutableStateOf(false) }
+    var specOpen by remember { mutableStateOf(false) }
     val laserState by vm.laser.state.collectAsState()
     val laserConnected = laserState is LaserState.Connected
     val target = vm.dialogTarget
@@ -96,12 +97,13 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
         Column(Modifier.fillMaxSize().padding(padding)) {
             Text(
                 when (mode) {
-                    CanvasMode.DRAW_OUTLINE -> "Нарисуйте контур помещения пальцем или стилусом одной линией — она сама выпрямится."
-                    CanvasMode.DRAW_ROUTE -> "Проведите трассу «${routing?.label}» поверх плана — участки выровняются по стенам."
-                    CanvasMode.VIEW -> "Нажмите на стену или участок инженерии, чтобы ввести длину. Двумя пальцами — масштаб, двойное касание — сброс."
+                    CanvasMode.DRAW_OUTLINE -> "Нарисуйте контур одной линией — она выпрямится сама"
+                    CanvasMode.DRAW_ROUTE -> "Проведите трассу «${routing?.label}» поверх плана"
+                    CanvasMode.VIEW -> summary(room)
                 },
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
             )
             PlanCanvas(
                 room = room,
@@ -130,10 +132,10 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                     }
                 },
                 onTap = vm::openDialog,
-                modifier = Modifier.fillMaxWidth().height(340.dp).padding(horizontal = 16.dp),
+                modifier = Modifier.fillMaxWidth().weight(1f).padding(horizontal = 8.dp),
             )
             Row(
-                Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
+                Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -160,6 +162,7 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                                 }
                             }
                         }
+                        OutlinedButton(onClick = { specOpen = true }) { Text("Спецификация ▴") }
                         MeasureFlow.nextEmpty(room)?.let { next ->
                             OutlinedButton(onClick = { vm.openDialog(next) }) { Text("Мерить по порядку") }
                         }
@@ -167,9 +170,24 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                     }
                 }
             }
-            if (room.hasOutline) {
-                MeasureList(vm, room, onEditEng = { engEdit = EngEdit(it.type, it) }, modifier = Modifier.weight(1f))
-            }
+        }
+    }
+
+    if (specOpen && room.hasOutline) {
+        ModalBottomSheet(onDismissRequest = { specOpen = false }) {
+            Text(
+                "Спецификация",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
+            MeasureList(
+                vm,
+                room,
+                onEditEng = { engEdit = EngEdit(it.type, it); specOpen = false },
+                onPick = { t -> specOpen = false; vm.openDialog(t) },
+                onStartRoute = { e -> specOpen = false; vm.startRouting(e.id) },
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 
@@ -210,6 +228,14 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
     }
 }
 
+/** Короткая сводка под заголовком: площадь и сколько осталось измерить. */
+private fun summary(room: Room): String {
+    val all = MeasureFlow.targets(room)
+    val left = all.count { MeasureFlow.valueOf(room, it) == null }
+    val area = Geometry.stats(room).floorArea?.let { "Площадь ${fmtArea(it)} · " } ?: ""
+    return area + if (left == 0) "всё измерено" else "осталось измерить: $left из ${all.size} · нажмите на стену"
+}
+
 private fun targetColor(room: Room, target: MeasureTarget): Color? = when (target) {
     is MeasureTarget.Wall -> wallColor(target.index, room.walls.size)
     is MeasureTarget.EngSegment -> room.engineering.firstOrNull { it.id == target.elementId }?.let { engColor(it.type) }
@@ -217,7 +243,14 @@ private fun targetColor(room: Room, target: MeasureTarget): Color? = when (targe
 }
 
 @Composable
-private fun MeasureList(vm: MeasureViewModel, room: Room, onEditEng: (EngElement) -> Unit, modifier: Modifier) {
+private fun MeasureList(
+    vm: MeasureViewModel,
+    room: Room,
+    onEditEng: (EngElement) -> Unit,
+    onPick: (MeasureTarget) -> Unit,
+    onStartRoute: (EngElement) -> Unit,
+    modifier: Modifier,
+) {
     LazyColumn(
         modifier = modifier,
         contentPadding = PaddingValues(16.dp, 0.dp, 16.dp, 24.dp),
@@ -235,14 +268,14 @@ private fun MeasureList(vm: MeasureViewModel, room: Room, onEditEng: (EngElement
                     item(key = "eng-${e.id}") {
                         SectionHeader("${MeasureFlow.engTitle(room, e.id)} · ${e.label.removePrefix(e.type.title).trimStart(',', ' ')}", engColor(e.type)) {
                             TextButton(onClick = { onEditEng(e) }) { Text("Изм.") }
-                            TextButton(onClick = { vm.startRouting(e.id) }) { Text("Трасса") }
+                            TextButton(onClick = { onStartRoute(e) }) { Text("Трасса") }
                             TextButton(onClick = { vm.deleteEngineering(e.id) }) { Text("Удал.") }
                         }
                     }
                 }
             }
             item(key = t.toString()) {
-                MeasureRow(room, t, targetColor(room, t), selected = vm.dialogTarget == t, onClick = { vm.openDialog(t) })
+                MeasureRow(room, t, targetColor(room, t), selected = vm.dialogTarget == t, onClick = { onPick(t) })
             }
         }
         item {
