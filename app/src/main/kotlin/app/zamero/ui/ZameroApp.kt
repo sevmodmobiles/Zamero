@@ -6,11 +6,17 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 
 @Composable
 fun ZameroApp(vm: MeasureViewModel = viewModel()) {
+    val project = vm.openProject
     val room = vm.openRoom
-    if (room == null) {
-        ProjectScreen(vm)
-    } else {
-        BackHandler { vm.closeRoom() }
-        RoomScreen(vm, room)
+    when {
+        project == null -> ProjectsScreen(vm)
+        room == null -> {
+            BackHandler { vm.closeProject() }
+            ProjectScreen(vm, project)
+        }
+        else -> {
+            BackHandler { vm.closeRoom() }
+            RoomScreen(vm, room)
+        }
     }
 }

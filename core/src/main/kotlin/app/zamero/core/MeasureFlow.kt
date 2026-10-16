@@ -60,7 +60,7 @@ object MeasureFlow {
         is MeasureTarget.OpeningHeight -> "${openingTitle(room, target.index)}: высота"
     }
 
-    private fun openingTitle(room: Room, index: Int): String {
+    fun openingTitle(room: Room, index: Int): String {
         val type = room.openings[index].type
         val number = room.openings.take(index + 1).count { it.type == type }
         return "${type.title} $number"

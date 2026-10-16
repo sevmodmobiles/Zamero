@@ -1,4 +1,4 @@
-name: CI
+name: Build APK
 
 on:
   push:
@@ -6,8 +6,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -17,35 +17,58 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
+
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Unit tests (core)
-        run: ./gradlew :core:test
+        run: ./gradlew :core:test --no-daemon
 
-      - name: Build debug APK
-        run: ./gradlew :app:assembleDebug
+      - name: Signing key from secrets
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ZAMERO_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ZAMERO_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/zamero.keystore"
+            echo "ZAMERO_KEYSTORE_FILE=$RUNNER_TEMP/zamero.keystore" >> "$GITHUB_ENV"
+            echo "ZAMERO_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Секреты подписи не заданы — APK подписан временным ключом, самообновление поверх не установится"
+          fi
 
-      - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk zamero-${{ github.run_number }}.apk
+      - name: Build release APK
+        run: |
+          ./gradlew :app:assembleRelease --no-daemon
+          cp app/build/outputs/apk/release/app-release.apk Zamero.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: zamero-apk
-          path: zamero-*.apk
+          name: Zamero-apk
+          path: Zamero.apk
 
-      # Последняя сборка всегда лежит в релизе «latest» — APK можно скачать прямо на телефон.
-      - name: Publish "latest" release
+      - name: Release notes
+        if: github.event_name != 'pull_request'
+        run: git log -1 --pretty=%B | grep -v -E '^(Co-Authored-By|Claude-Session):' | sed '/^$/N;/^\n$/D' > notes.txt
+
+      # Каждая сборка — релиз v0.N. Приложение само проверяет последний релиз и обновляется.
+      - name: Publish release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v0.${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          name: Замеро 0.${{ github.run_number }}
+          body_path: notes.txt
+          files: Zamero.apk
+
+      # Старый «плавающий» релиз из первых сборок больше не нужен.
+      - name: Remove legacy "latest" release
         if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release delete latest --cleanup-tag --yes || true
-          gh release create latest zamero-${{ github.run_number }}.apk \
-            --prerelease \
-            --target "$GITHUB_SHA" \
-            --title "Замеро — сборка ${{ github.run_number }}" \
-            --notes "Ветка: ${GITHUB_REF_NAME}, коммит: ${GITHUB_SHA::7}. Отладочная сборка: установите APK, разрешив установку из неизвестных источников."
+        run: gh release delete latest --cleanup-tag --yes || true

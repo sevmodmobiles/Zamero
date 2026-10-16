@@ -26,23 +26,19 @@ object Geometry {
 
     fun stats(room: Room): RoomStats {
         val lengths = room.walls.map { it?.meters }
-        val complete = lengths.all { it != null }
+        val complete = room.hasOutline && lengths.all { it != null }
         val perimeter = if (complete) lengths.sumOf { it!! } else null
 
         var floorArea: Double? = null
         var closure: Double? = null
         if (complete) {
-            val polygon = closedPolygon(lengths.map { it!! }, room.shape.turns)
+            val polygon = measuredPolygon(room.outline, lengths.map { it!! })
             floorArea = polygon.area
             closure = polygon.closureError
         }
 
         val height = room.height?.meters
-        val openingsArea = room.openings.sumOf { o ->
-            val w = o.width?.meters ?: 0.0
-            val h = o.height?.meters ?: 0.0
-            w * h
-        }
+        val openingsArea = room.openings.sumOf { o -> (o.width?.meters ?: 0.0) * (o.height?.meters ?: 0.0) }
         val gross = if (perimeter != null && height != null) perimeter * height else null
         return RoomStats(
             floorArea = floorArea,
@@ -55,60 +51,54 @@ object Geometry {
         )
     }
 
-    /** Замкнутый контур: вершины (x, y) в метрах, площадь и исходная невязка. */
-    data class Polygon(val vertices: List<Pair<Double, Double>>, val area: Double, val closureError: Double)
-
-    /** Типичные пропорции формы — для эскиза, пока не все стены измерены. */
-    fun templateLengths(shape: Shape): List<Double> = when (shape) {
-        Shape.RECTANGLE -> listOf(4.0, 3.0, 4.0, 3.0)
-        Shape.L_SHAPE -> listOf(5.0, 4.0, 3.0, 1.5, 2.0, 2.5)
-    }
-
-    /** Контур для эскиза: измеренные стены, если все есть, иначе шаблон. */
-    fun sketch(room: Room): Polygon {
-        val measured = room.walls.map { it?.meters }
-        val lengths = if (measured.all { it != null && it > 0 }) measured.map { it!! } else templateLengths(room.shape)
-        return closedPolygon(lengths, room.shape.turns)
-    }
+    /** Замкнутый контур в метрах: вершины, площадь и исходная невязка. */
+    data class Polygon(val vertices: List<Point>, val area: Double, val closureError: Double)
 
     /**
-     * Строит контур из длин стен и поворотов на 90°. Реальные замеры почти никогда
-     * не сходятся идеально, поэтому невязку по каждой оси распределяем между стенами
-     * этой оси пропорционально их длине (для прямоугольника это даёт среднее
-     * противоположных стен), а затем считаем площадь по формуле Гаусса.
+     * Контур из направлений стен (берутся с эскиза) и измеренных длин.
+     * Реальные замеры почти никогда не сходятся идеально, поэтому невязку по каждой оси
+     * распределяем между стенами пропорционально их проекции на эту ось
+     * (для прямоугольника это даёт среднее противоположных стен), а затем считаем
+     * площадь по формуле Гаусса.
      */
-    fun closedPolygon(lengths: List<Double>, turns: List<Turn>): Polygon {
-        require(lengths.size == turns.size)
-        // Направления: 0 — +x, 1 — -y, 2 — -x, 3 — +y (обход по часовой стрелке).
-        val dirs = IntArray(lengths.size)
-        var dir = 0
-        for (i in lengths.indices) {
-            dirs[i] = dir
-            dir = (dir + if (turns[i] == Turn.RIGHT) 1 else 3) % 4
+    fun measuredPolygon(outline: List<Point>, lengths: List<Double>): Polygon {
+        require(outline.size == lengths.size && outline.size >= 3)
+        val n = outline.size
+        val dx = DoubleArray(n)
+        val dy = DoubleArray(n)
+        for (i in 0 until n) {
+            val a = outline[i]
+            val b = outline[(i + 1) % n]
+            val len = hypot(b.x - a.x, b.y - a.y).takeIf { it > 0 } ?: 1.0
+            dx[i] = lengths[i] * (b.x - a.x) / len
+            dy[i] = lengths[i] * (b.y - a.y) / len
         }
-        val dx = DoubleArray(lengths.size) { i -> lengths[i] * DX[dirs[i]] }
-        val dy = DoubleArray(lengths.size) { i -> lengths[i] * DY[dirs[i]] }
-
         val gapX = dx.sum()
         val gapY = dy.sum()
         val closure = hypot(gapX, gapY)
-
         distribute(dx, gapX)
         distribute(dy, gapY)
 
-        val vertices = ArrayList<Pair<Double, Double>>(lengths.size)
+        val vertices = ArrayList<Point>(n)
         var x = 0.0
         var y = 0.0
-        var twiceArea = 0.0
-        for (i in lengths.indices) {
-            vertices.add(x to y)
-            val nx = x + dx[i]
-            val ny = y + dy[i]
-            twiceArea += x * ny - nx * y
-            x = nx
-            y = ny
+        for (i in 0 until n) {
+            vertices.add(Point(x, y))
+            x += dx[i]
+            y += dy[i]
         }
-        return Polygon(vertices = vertices, area = abs(twiceArea) / 2, closureError = closure)
+        return Polygon(vertices, abs(Straighten.signedArea(vertices)), closure)
+    }
+
+    /** Контур для показа: по замерам, если все стены измерены, иначе эскиз. */
+    fun display(room: Room): List<Point> {
+        if (!room.hasOutline) return emptyList()
+        val lengths = room.walls.map { it?.meters }
+        return if (lengths.all { it != null && it > 0 }) {
+            measuredPolygon(room.outline, lengths.map { it!! }).vertices
+        } else {
+            room.outline
+        }
     }
 
     private fun distribute(deltas: DoubleArray, gap: Double) {
@@ -116,7 +106,4 @@ object Geometry {
         if (total == 0.0) return
         for (i in deltas.indices) deltas[i] -= gap * abs(deltas[i]) / total
     }
-
-    private val DX = intArrayOf(1, 0, -1, 0)
-    private val DY = intArrayOf(0, -1, 0, 1)
 }

@@ -12,14 +12,30 @@ android {
         applicationId = "app.zamero"
         minSdk = 26
         targetSdk = 35
-        // В CI номер сборки GitHub Actions становится versionCode, чтобы APK ставились поверх.
-        versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
-        versionName = "0.2.$versionCode"
+        // Номер сборки GitHub Actions = versionCode = номер релиза v0.N (по нему работает самообновление).
+        val build = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+        versionCode = build
+        versionName = "0.$build"
+    }
+
+    // Ключ подписи приходит из секретов GitHub (ZAMERO_KEYSTORE_BASE64, ZAMERO_KEYSTORE_PASSWORD).
+    // Пока секретов нет, релиз подписывается отладочным ключом сборщика.
+    val keystorePath = System.getenv("ZAMERO_KEYSTORE_FILE")
+    signingConfigs {
+        if (keystorePath != null) {
+            create("release") {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("ZAMERO_KEYSTORE_PASSWORD")
+                keyAlias = "zamero"
+                keyPassword = System.getenv("ZAMERO_KEYSTORE_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
     compileOptions {

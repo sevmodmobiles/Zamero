@@ -18,6 +18,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import app.zamero.laser.BleLaserClient
@@ -31,19 +34,22 @@ private val BLE_PERMISSIONS = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
 
 @Composable
 fun LaserDialog(client: BleLaserClient, state: LaserState, onDismiss: () -> Unit) {
+    val log by client.log.collectAsState()
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
         if (result.values.all { it }) client.startScan()
     }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Bluetooth-рулетка") },
+        title = { Text("Bluetooth-дальномер") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 when (state) {
                     LaserState.Idle -> Text(
-                        "Включите рулетку и Bluetooth на телефоне, затем нажмите «Найти». " +
-                            "Поддерживаются Leica DISTO и рулетки с UART/HM-10 модулем.",
+                        "Включите дальномер и Bluetooth на телефоне, затем нажмите «Найти». " +
+                            "Поддерживаются Leica DISTO и дальномеры с UART/HM-10 модулем. " +
+                            "С незнакомым дальномером приложение покажет журнал данных — " +
+                            "пришлите его снимок, и мы добавим поддержку.",
                     )
                     is LaserState.Scanning -> {
                         LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -66,10 +72,22 @@ fun LaserDialog(client: BleLaserClient, state: LaserState, onDismiss: () -> Unit
                         LinearProgressIndicator(Modifier.fillMaxWidth())
                         Text("Подключаемся к ${state.name}…")
                     }
-                    is LaserState.Connected -> Text(
-                        "Подключено: ${state.name} (${state.profile}).\n" +
-                            "Нажимайте кнопку замера на рулетке — значение само попадёт в текущее поле.",
-                    )
+                    is LaserState.Connected -> if (state.profile != null) {
+                        Text(
+                            "Подключено: ${state.name} (${state.profile}).\n" +
+                                "Откройте стену и нажмите кнопку замера на дальномере — значение подставится само.",
+                        )
+                    } else {
+                        Text(
+                            "Подключено: ${state.name}, но протокол пока неизвестен. " +
+                                "Сделайте 2–3 замера (например, 1000 и 2000 мм) и пришлите снимок журнала:",
+                        )
+                        LazyColumn(Modifier.heightIn(max = 240.dp)) {
+                            items(log) { line ->
+                                Text(line, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                            }
+                        }
+                    }
                     is LaserState.Error -> Text(state.message, color = MaterialTheme.colorScheme.error)
                 }
             }

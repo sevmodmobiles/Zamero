@@ -8,106 +8,188 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.zamero.core.Measure
 import app.zamero.core.MeasureFlow
+import app.zamero.core.MeasureTarget
 import app.zamero.core.Opening
 import app.zamero.core.OpeningType
+import app.zamero.core.Point
 import app.zamero.core.Project
 import app.zamero.core.Room
-import app.zamero.core.Shape
 import app.zamero.core.Source
-import app.zamero.core.MeasureTarget
 import app.zamero.data.ProjectStore
 import app.zamero.laser.BleLaserClient
+import app.zamero.update.Updater
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.UUID
 
-/** Последнее записанное значение — для подтверждения на экране. */
-data class LastRecord(val label: String, val measure: Measure)
+/** Замер с дальномера; [seq] растёт с каждым новым замером, даже если значение то же. */
+data class LaserReading(val meters: Double, val seq: Int)
 
-class MeasureViewModel(app: Application) : AndroidViewModel(app) {
+class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     private val store = ProjectStore(app)
     val laser = BleLaserClient(app)
 
-    var project by mutableStateOf(store.load() ?: Project(id = "main", name = "Мой объект"))
+    var projects by mutableStateOf(store.load().sortedByDescending { it.createdAt })
+        private set
+    var openProjectId by mutableStateOf<String?>(null)
         private set
     var openRoomId by mutableStateOf<String?>(null)
         private set
-    /** Поле, куда попадёт следующее значение (с рулетки, камеры или клавиатуры). */
-    var focus by mutableStateOf<MeasureTarget?>(null)
+    /** Открытое окно ввода длины. */
+    var dialogTarget by mutableStateOf<MeasureTarget?>(null)
         private set
-    var lastRecord by mutableStateOf<LastRecord?>(null)
+    var lastLaser by mutableStateOf<LaserReading?>(null)
         private set
 
-    val openRoom: Room? get() = project.rooms.firstOrNull { it.id == openRoomId }
+    var update by mutableStateOf<Updater.Release?>(null)
+        private set
+    var updateStatus by mutableStateOf<String?>(null)
+        private set
+
+    val lastContractor: String get() = store.lastContractor
+    val openProject: Project? get() = projects.firstOrNull { it.id == openProjectId }
+    val openRoom: Room? get() = openProject?.rooms?.firstOrNull { it.id == openRoomId }
 
     init {
         viewModelScope.launch {
-            laser.readings.collect { record(it, Source.LASER) }
+            laser.readings.collect { lastLaser = LaserReading(it, (lastLaser?.seq ?: 0) + 1) }
         }
+        checkUpdate()
     }
 
-    /** Записать измерение в текущее поле и перейти к следующему пустому. */
-    fun record(meters: Double, source: Source) {
-        val room = openRoom ?: return
-        val target = focus ?: MeasureFlow.nextEmpty(room) ?: return
-        val measure = Measure(meters, source)
-        val (updated, next) = MeasureFlow.record(room, target, measure)
-        lastRecord = LastRecord(MeasureFlow.label(room, target), measure)
-        replaceRoom(updated)
-        focus = next
+    // --- Объекты -------------------------------------------------------------
+
+    fun createProject(address: String, customer: String, contractor: String) {
+        val p = Project(
+            id = UUID.randomUUID().toString(),
+            address = address,
+            customer = customer,
+            contractor = contractor,
+            createdAt = System.currentTimeMillis(),
+        )
+        store.lastContractor = contractor
+        saveProjects(listOf(p) + projects)
+        openProjectId = p.id
     }
 
-    fun select(target: MeasureTarget) {
-        focus = target
+    fun editProjectInfo(address: String, customer: String, contractor: String) {
+        store.lastContractor = contractor
+        editProject { copy(address = address, customer = customer, contractor = contractor) }
     }
 
-    fun clear(target: MeasureTarget) {
-        val room = openRoom ?: return
-        replaceRoom(MeasureFlow.set(room, target, null))
-        focus = target
+    fun openProject(id: String) {
+        openProjectId = id
+        openRoomId = null
     }
+
+    fun closeProject() {
+        openProjectId = null
+        openRoomId = null
+    }
+
+    fun deleteProject(id: String) {
+        saveProjects(projects.filterNot { it.id == id })
+        if (openProjectId == id) closeProject()
+    }
+
+    // --- Помещения -----------------------------------------------------------
 
     fun addRoom() {
-        val n = project.rooms.size + 1
-        val room = Room(id = UUID.randomUUID().toString(), name = "Помещение $n")
-        updateProject(project.copy(rooms = project.rooms + room))
-        openRoom(room.id)
+        val project = openProject ?: return
+        val room = Room(id = UUID.randomUUID().toString(), name = "Помещение ${project.rooms.size + 1}")
+        editProject { copy(rooms = rooms + room) }
+        openRoomId = room.id
     }
 
     fun openRoom(id: String) {
         openRoomId = id
-        lastRecord = null
-        focus = openRoom?.let { MeasureFlow.nextEmpty(it) }
     }
 
     fun closeRoom() {
         openRoomId = null
-        focus = null
+        dialogTarget = null
     }
 
     fun deleteRoom(id: String) {
-        updateProject(project.copy(rooms = project.rooms.filterNot { it.id == id }))
+        editProject { copy(rooms = rooms.filterNot { it.id == id }) }
         if (openRoomId == id) closeRoom()
     }
 
     fun renameRoom(name: String) = editRoom { copy(name = name) }
 
-    fun renameProject(name: String) = updateProject(project.copy(name = name))
+    /** Новый контур после рисования пальцем. */
+    fun setOutline(points: List<Point>) = editRoom { withOutline(points) }
 
-    fun setShape(shape: Shape) {
-        editRoom { withShape(shape) }
-        focus = openRoom?.let { MeasureFlow.nextEmpty(it) }
+    // --- Замеры --------------------------------------------------------------
+
+    fun openDialog(target: MeasureTarget) {
+        dialogTarget = target
+    }
+
+    fun closeDialog() {
+        dialogTarget = null
+    }
+
+    /**
+     * Сохраняет значение (null — стереть). Если [goNext], сразу открывает окно
+     * для следующего неизмеренного поля.
+     */
+    fun saveMeasure(target: MeasureTarget, meters: Double?, source: Source, goNext: Boolean) {
+        val room = openRoom ?: return
+        val updated = MeasureFlow.set(room, target, meters?.let { Measure(it, source) })
+        replaceRoom(updated)
+        dialogTarget = if (goNext) MeasureFlow.nextEmpty(updated, target) else null
     }
 
     fun addOpening(type: OpeningType) {
         editRoom { copy(openings = openings + Opening(type)) }
         val room = openRoom ?: return
-        focus = MeasureTarget.OpeningWidth(room.openings.lastIndex)
+        dialogTarget = MeasureTarget.OpeningWidth(room.openings.lastIndex)
     }
 
     fun removeOpening(index: Int) {
+        dialogTarget = null
         editRoom { copy(openings = openings.filterIndexed { i, _ -> i != index }) }
-        focus = openRoom?.let { MeasureFlow.nextEmpty(it) }
+    }
+
+    // --- Обновление ----------------------------------------------------------
+
+    fun checkUpdate() {
+        viewModelScope.launch {
+            update = withContext(Dispatchers.IO) { runCatching { Updater.checkForUpdate(app) }.getOrNull() }
+        }
+    }
+
+    fun startUpdate() {
+        val rel = update ?: return
+        if (updateStatus != null) return
+        if (!Updater.ensureInstallPermission(app)) {
+            updateStatus = null
+            return
+        }
+        updateStatus = "Скачивание…"
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val apk = Updater.download(app, rel) { pct -> updateStatus = "Скачивание… $pct%" }
+                    updateStatus = "Установка…"
+                    Updater.install(app, apk)
+                }
+            }
+            updateStatus = result.exceptionOrNull()?.let { "Ошибка обновления: ${it.message}" }
+        }
+    }
+
+    fun dismissUpdateError() {
+        updateStatus = null
+    }
+
+    // --- Внутреннее ----------------------------------------------------------
+
+    private fun editProject(block: Project.() -> Project) {
+        val id = openProjectId ?: return
+        saveProjects(projects.map { if (it.id == id) it.block() else it })
     }
 
     private fun editRoom(block: Room.() -> Room) {
@@ -115,12 +197,12 @@ class MeasureViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun replaceRoom(room: Room) {
-        updateProject(project.copy(rooms = project.rooms.map { if (it.id == room.id) room else it }))
+        editProject { copy(rooms = rooms.map { if (it.id == room.id) room else it }) }
     }
 
-    private fun updateProject(p: Project) {
-        project = p
-        viewModelScope.launch(Dispatchers.IO) { store.save(p) }
+    private fun saveProjects(list: List<Project>) {
+        projects = list
+        viewModelScope.launch(Dispatchers.IO) { store.save(list) }
     }
 
     override fun onCleared() {

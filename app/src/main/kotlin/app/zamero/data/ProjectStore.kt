@@ -4,38 +4,47 @@ import android.content.Context
 import app.zamero.core.Measure
 import app.zamero.core.Opening
 import app.zamero.core.OpeningType
+import app.zamero.core.Point
 import app.zamero.core.Project
 import app.zamero.core.Room
-import app.zamero.core.Shape
 import app.zamero.core.Source
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
-/** Хранит объект обмера в JSON-файле во внутренней памяти приложения. */
+/** Хранит все объекты обмера в JSON-файле во внутренней памяти приложения. */
 class ProjectStore(context: Context) {
-    private val file = File(context.filesDir, "project.json")
+    private val file = File(context.filesDir, "projects.json")
+    private val prefs = context.getSharedPreferences("zamero", Context.MODE_PRIVATE)
 
-    fun load(): Project? = runCatching {
-        if (file.exists()) JSONObject(file.readText()).toProject() else null
-    }.getOrNull()
+    /** Исполнитель из последнего объекта — подставляем по умолчанию. */
+    var lastContractor: String
+        get() = prefs.getString("contractor", "") ?: ""
+        set(value) = prefs.edit().putString("contractor", value).apply()
+
+    fun load(): List<Project> = runCatching {
+        if (file.exists()) JSONArray(file.readText()).objects().map { it.toProject() } else emptyList()
+    }.getOrDefault(emptyList())
 
     @Synchronized
-    fun save(project: Project) {
+    fun save(projects: List<Project>) {
         val tmp = File(file.parentFile, file.name + ".tmp")
-        tmp.writeText(project.toJson().toString())
+        tmp.writeText(JSONArray(projects.map { it.toJson() }).toString())
         tmp.renameTo(file)
     }
 
     private fun Project.toJson() = JSONObject()
         .put("id", id)
-        .put("name", name)
+        .put("address", address)
+        .put("customer", customer)
+        .put("contractor", contractor)
+        .put("createdAt", createdAt)
         .put("rooms", JSONArray(rooms.map { it.toJson() }))
 
     private fun Room.toJson() = JSONObject()
         .put("id", id)
         .put("name", name)
-        .put("shape", shape.name)
+        .put("outline", JSONArray(outline.map { JSONArray().put(it.x).put(it.y) }))
         .put("walls", JSONArray(walls.map { it.toJson() ?: JSONObject.NULL }))
         .put("height", height.toJson() ?: JSONObject.NULL)
         .put(
@@ -55,18 +64,23 @@ class ProjectStore(context: Context) {
 
     private fun JSONObject.toProject() = Project(
         id = getString("id"),
-        name = getString("name"),
+        address = getString("address"),
+        customer = optString("customer"),
+        contractor = optString("contractor"),
+        createdAt = optLong("createdAt"),
         rooms = getJSONArray("rooms").objects().map { it.toRoom() },
     )
 
     private fun JSONObject.toRoom(): Room {
-        val shape = Shape.valueOf(getString("shape"))
+        val outline = getJSONArray("outline").let { arr ->
+            List(arr.length()) { i -> arr.getJSONArray(i).let { Point(it.getDouble(0), it.getDouble(1)) } }
+        }
         val walls = getJSONArray("walls").let { arr -> List(arr.length()) { arr.optJSONObject(it).toMeasure() } }
         return Room(
             id = getString("id"),
             name = getString("name"),
-            shape = shape,
-            walls = List(shape.wallCount) { walls.getOrNull(it) },
+            outline = outline,
+            walls = List(outline.size) { walls.getOrNull(it) },
             height = optJSONObject("height").toMeasure(),
             openings = getJSONArray("openings").objects().map { o ->
                 Opening(

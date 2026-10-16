@@ -1,35 +1,48 @@
 package app.zamero.core
 
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 
 /** Текстовый отчёт по объекту — для отправки в мессенджер или почту. */
 object Report {
 
     fun text(project: Project): String = buildString {
-        appendLine("Обмер: ${project.name}")
+        appendLine("ОБМЕР ПОМЕЩЕНИЙ")
+        appendLine("Адрес: ${project.address}")
+        if (project.customer.isNotBlank()) appendLine("Заказчик: ${project.customer}")
+        if (project.contractor.isNotBlank()) appendLine("Исполнитель: ${project.contractor}")
+        if (project.createdAt > 0) {
+            appendLine("Дата: ${SimpleDateFormat("dd.MM.yyyy", Locale.ROOT).format(Date(project.createdAt))}")
+        }
         appendLine()
         var total = 0.0
         project.rooms.forEach { room ->
             val s = Geometry.stats(room)
-            appendLine("■ ${room.name} (${room.shape.title.lowercase()})")
+            appendLine("■ ${room.name}")
             room.walls.forEachIndexed { i, w -> appendLine("  Стена ${i + 1}: ${w.fmt()}") }
             appendLine("  Высота: ${room.height.fmt()}")
             room.openings.indices.forEach { i ->
                 val o = room.openings[i]
-                appendLine("  ${MeasureFlow.label(room, MeasureTarget.OpeningWidth(i)).substringBefore(':')}: ${o.width.fmt()} × ${o.height.fmt()}")
+                appendLine("  ${MeasureFlow.openingTitle(room, i)}: ${o.width.fmt()} × ${o.height.fmt()}")
             }
             s.floorArea?.let { appendLine("  Площадь пола: ${m2(it)}"); total += it }
-            s.perimeter?.let { appendLine("  Периметр: ${m(it)}") }
+            s.perimeter?.let { appendLine("  Периметр: ${mm(it)}") }
             s.wallAreaNet?.let { appendLine("  Площадь стен без проёмов: ${m2(it)}") }
             s.volume?.let { appendLine("  Объём: ${"%.2f".format(Locale.ROOT, it)} м³") }
-            if (s.needsRecheck) appendLine("  ⚠ Контур не сходится на ${cm(s.closureError!!)} — перемерьте стены")
+            if (s.needsRecheck) appendLine("  ⚠ Контур не сходится на ${mm(s.closureError!!)} — перемерьте стены")
             appendLine()
         }
         append("Итого площадь: ${m2(total)}")
     }
 
-    private fun Measure?.fmt(): String = this?.let { "${m(it.meters)} (${it.source.title})" } ?: "—"
-    private fun m(v: Double) = "%.3f м".format(Locale.ROOT, v)
+    private fun Measure?.fmt(): String = this?.let { "${mm(it.meters)} (${it.source.title})" } ?: "—"
     private fun m2(v: Double) = "%.2f м²".format(Locale.ROOT, v)
-    private fun cm(v: Double) = "%.1f см".format(Locale.ROOT, v * 100)
+
+    /** Миллиметры с разделением разрядов: «3 456 мм». */
+    fun mm(meters: Double): String {
+        val v = Math.round(meters * 1000)
+        val grouped = v.toString().reversed().chunked(3).joinToString(" ").reversed()
+        return "$grouped мм"
+    }
 }

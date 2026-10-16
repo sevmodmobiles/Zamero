@@ -16,7 +16,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -29,39 +29,39 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.zamero.core.Geometry
+import app.zamero.core.Project
 import app.zamero.core.Report
 import app.zamero.core.Room
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ProjectScreen(vm: MeasureViewModel) {
+fun ProjectScreen(vm: MeasureViewModel, project: Project) {
     val context = LocalContext.current
-    val project = vm.project
-    var renaming by remember { mutableStateOf(false) }
-    var deleting by remember { mutableStateOf<Room?>(null) }
+    var editing by remember { mutableStateOf(false) }
+    var deletingRoom by remember { mutableStateOf<Room?>(null) }
+    var deletingProject by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(project.name, modifier = Modifier.clickable { renaming = true }) },
+                navigationIcon = { TextButton(onClick = vm::closeProject) { Text("Назад") } },
+                title = { Text(project.address, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 actions = {
-                    TextButton(
-                        enabled = project.rooms.isNotEmpty(),
-                        onClick = {
-                            val send = Intent(Intent.ACTION_SEND)
-                                .setType("text/plain")
-                                .putExtra(Intent.EXTRA_SUBJECT, "Обмер: ${project.name}")
-                                .putExtra(Intent.EXTRA_TEXT, Report.text(project))
-                            context.startActivity(Intent.createChooser(send, "Отправить обмер"))
-                        },
-                    ) { Text("Отправить") }
+                    TextButton(onClick = {
+                        val send = Intent(Intent.ACTION_SEND)
+                            .setType("text/plain")
+                            .putExtra(Intent.EXTRA_SUBJECT, "Обмер: ${project.address}")
+                            .putExtra(Intent.EXTRA_TEXT, Report.text(project))
+                        context.startActivity(Intent.createChooser(send, "Отправить обмер"))
+                    }) { Text("Отправить") }
                 },
             )
         },
         floatingActionButton = {
-            ExtendedFloatingActionButton(onClick = vm::addRoom) { Text("+ Помещение") }
+            ExtendedFloatingActionButton(onClick = vm::addRoom) { Text("Помещение +") }
         },
     ) { padding ->
         val total = project.rooms.sumOf { Geometry.stats(it).floorArea ?: 0.0 }
@@ -71,56 +71,76 @@ fun ProjectScreen(vm: MeasureViewModel) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item {
+                Card(Modifier.fillMaxWidth().clickable { editing = true }) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(project.address, style = MaterialTheme.typography.titleMedium)
+                        Text("Заказчик: ${project.customer.ifBlank { "—" }}")
+                        Text("Исполнитель: ${project.contractor.ifBlank { "—" }}")
+                        if (project.createdAt > 0) Text("Дата: ${formatDate(project.createdAt)}", style = MaterialTheme.typography.bodySmall)
+                        Text("Нажмите, чтобы изменить", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            }
+            item {
                 if (project.rooms.isEmpty()) {
-                    Text(
-                        "Добавьте первое помещение. Значения можно вводить вручную, " +
-                            "с Bluetooth-рулетки или камерой телефона.",
-                    )
+                    Text("Добавьте помещение и нарисуйте его контур пальцем.")
                 } else {
                     Text("Общая площадь: ${fmtArea(total)}", style = MaterialTheme.typography.titleLarge)
                 }
             }
             items(project.rooms, key = { it.id }) { room ->
-                RoomCard(room, onOpen = { vm.openRoom(room.id) }, onDelete = { deleting = room })
+                RoomCard(room, onOpen = { vm.openRoom(room.id) }, onDelete = { deletingRoom = room })
+            }
+            item {
+                OutlinedButton(onClick = { deletingProject = true }) { Text("Удалить объект") }
             }
         }
     }
 
-    if (renaming) {
-        NameDialog("Название объекта", project.name, onDismiss = { renaming = false }) {
-            vm.renameProject(it)
-            renaming = false
+    if (editing) {
+        ProjectInfoDialog(
+            title = "Объект",
+            initial = project,
+            onDismiss = { editing = false },
+            onSave = { address, customer, contractor ->
+                vm.editProjectInfo(address, customer, contractor)
+                editing = false
+            },
+        )
+    }
+    deletingRoom?.let { room ->
+        ConfirmDialog("Удалить «${room.name}»?", onDismiss = { deletingRoom = null }) {
+            vm.deleteRoom(room.id)
+            deletingRoom = null
         }
     }
-    deleting?.let { room ->
-        AlertDialog(
-            onDismissRequest = { deleting = null },
-            title = { Text("Удалить «${room.name}»?") },
-            confirmButton = {
-                TextButton(onClick = {
-                    vm.deleteRoom(room.id)
-                    deleting = null
-                }) { Text("Удалить") }
-            },
-            dismissButton = { TextButton(onClick = { deleting = null }) { Text("Отмена") } },
-        )
+    if (deletingProject) {
+        ConfirmDialog("Удалить объект со всеми помещениями?", onDismiss = { deletingProject = false }) {
+            vm.deleteProject(project.id)
+            deletingProject = false
+        }
     }
 }
 
 @Composable
 private fun RoomCard(room: Room, onOpen: () -> Unit, onDelete: () -> Unit) {
     val stats = Geometry.stats(room)
+    val measured = room.walls.count { it != null }
     Card(Modifier.fillMaxWidth().clickable(onClick = onOpen)) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(room.name, style = MaterialTheme.typography.titleMedium)
                 Text(
-                    stats.floorArea?.let { "${fmtArea(it)} · ${room.shape.title.lowercase()}" } ?: "Обмер не закончен",
+                    if (!room.hasOutline) {
+                        "Контур не нарисован"
+                    } else {
+                        stats.floorArea?.let(::fmtArea) ?: "Измерено стен: $measured из ${room.walls.size}"
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 if (stats.needsRecheck) {
                     Text(
-                        "Контур не сходится на ${fmtCm(stats.closureError!!)} — перемерьте",
+                        "Контур не сходится на ${fmtMm(stats.closureError!!)} — перемерьте",
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -132,12 +152,22 @@ private fun RoomCard(room: Room, onOpen: () -> Unit, onDelete: () -> Unit) {
 }
 
 @Composable
+internal fun ConfirmDialog(title: String, onDismiss: () -> Unit, onConfirm: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("Удалить") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } },
+    )
+}
+
+@Composable
 internal fun NameDialog(title: String, initial: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
     var text by remember { mutableStateOf(initial) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
-        text = { OutlinedTextField(value = text, onValueChange = { text = it }, singleLine = true) },
+        text = { androidx.compose.material3.OutlinedTextField(value = text, onValueChange = { text = it }, singleLine = true) },
         confirmButton = {
             TextButton(onClick = { onSave(text.trim()) }, enabled = text.isNotBlank()) { Text("Сохранить") }
         },

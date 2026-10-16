@@ -14,6 +14,7 @@ import android.content.Context
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import app.zamero.core.toHex
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -25,7 +26,8 @@ sealed interface LaserState {
     data object Idle : LaserState
     data class Scanning(val devices: List<FoundDevice>) : LaserState
     data class Connecting(val name: String) : LaserState
-    data class Connected(val name: String, val profile: String) : LaserState
+    /** [profile] == null — протокол неизвестен, пишем сырые данные в журнал. */
+    data class Connected(val name: String, val profile: String?) : LaserState
     data class Error(val message: String) : LaserState
 }
 
@@ -45,8 +47,14 @@ class BleLaserClient(context: Context) {
     private val _readings = MutableSharedFlow<Double>(extraBufferCapacity = 16)
     val readings: SharedFlow<Double> = _readings
 
+    private val _log = MutableStateFlow<List<String>>(emptyList())
+    /** Журнал для неизвестных дальномеров: сервисы и сырые пакеты в HEX. */
+    val log: StateFlow<List<String>> = _log
+
     private var gatt: BluetoothGatt? = null
     private var activeProfile: LaserProfile? = null
+    /** Характеристики, на которые ещё нужно подписаться (BLE разрешает одну операцию за раз). */
+    private val pendingSubscriptions = ArrayDeque<BluetoothGattCharacteristic>()
     private val found = LinkedHashMap<String, FoundDevice>()
 
     private val scanCallback = object : ScanCallback() {
@@ -75,6 +83,7 @@ class BleLaserClient(context: Context) {
         }
         disconnect()
         found.clear()
+        _log.value = emptyList()
         _state.value = LaserState.Scanning(emptyList())
         a.bluetoothLeScanner?.startScan(scanCallback)
         main.postDelayed(::stopScan, SCAN_TIMEOUT_MS)
@@ -100,6 +109,7 @@ class BleLaserClient(context: Context) {
         }
         gatt = null
         activeProfile = null
+        pendingSubscriptions.clear()
         _state.value = LaserState.Idle
     }
 
@@ -121,12 +131,27 @@ class BleLaserClient(context: Context) {
             for (profile in LaserProfiles.all) {
                 val ch = g.getService(profile.service)?.getCharacteristic(profile.characteristic) ?: continue
                 activeProfile = profile
-                enableNotifications(g, ch)
+                pendingSubscriptions += ch
+                subscribeNext(g)
                 _state.value = LaserState.Connected(name, profile.title)
                 return
             }
-            _state.value = LaserState.Error("$name: протокол этой рулетки пока не поддерживается")
-            g.disconnect()
+            // Протокол неизвестен: подписываемся на всё, что умеет присылать данные, и ведём журнал.
+            g.services.forEach { service ->
+                log("Сервис ${service.uuid}")
+                service.characteristics.forEach { ch ->
+                    val canNotify = ch.properties and
+                        (BluetoothGattCharacteristic.PROPERTY_NOTIFY or BluetoothGattCharacteristic.PROPERTY_INDICATE) != 0
+                    log("  ${ch.uuid}${if (canNotify) " [уведомления]" else ""}")
+                    if (canNotify) pendingSubscriptions += ch
+                }
+            }
+            _state.value = LaserState.Connected(name, null)
+            subscribeNext(g)
+        }
+
+        override fun onDescriptorWrite(g: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
+            subscribeNext(g)
         }
 
         override fun onCharacteristicChanged(g: BluetoothGatt, ch: BluetoothGattCharacteristic, value: ByteArray) {
@@ -144,22 +169,36 @@ class BleLaserClient(context: Context) {
     }
 
     private fun handle(ch: BluetoothGattCharacteristic, value: ByteArray) {
-        val profile = activeProfile ?: return
+        val profile = activeProfile
+        if (profile == null) {
+            log("${ch.uuid.toString().take(8)}: ${value.toHex()}")
+            return
+        }
         if (ch.uuid != profile.characteristic) return
         profile.parse(value)?.let { _readings.tryEmit(it) }
     }
 
+    private fun log(line: String) {
+        _log.value = (_log.value + line).takeLast(LOG_LINES)
+    }
+
+    private fun subscribeNext(g: BluetoothGatt) {
+        val ch = pendingSubscriptions.removeFirstOrNull() ?: return
+        if (!enableNotifications(g, ch)) subscribeNext(g)
+    }
+
+    /** Включает уведомления; false — если писать дескриптор не нужно (ждать ответа не будем). */
     @Suppress("DEPRECATION")
-    private fun enableNotifications(g: BluetoothGatt, ch: BluetoothGattCharacteristic) {
+    private fun enableNotifications(g: BluetoothGatt, ch: BluetoothGattCharacteristic): Boolean {
         g.setCharacteristicNotification(ch, true)
-        val descriptor = ch.getDescriptor(LaserProfiles.CCCD) ?: return
+        val descriptor = ch.getDescriptor(LaserProfiles.CCCD) ?: return false
         val value = if (ch.properties and BluetoothGattCharacteristic.PROPERTY_INDICATE != 0) {
             BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
         } else {
             BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            g.writeDescriptor(descriptor, value)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            g.writeDescriptor(descriptor, value) == BluetoothGatt.GATT_SUCCESS
         } else {
             descriptor.value = value
             g.writeDescriptor(descriptor)
@@ -168,5 +207,6 @@ class BleLaserClient(context: Context) {
 
     companion object {
         private const val SCAN_TIMEOUT_MS = 15_000L
+        private const val LOG_LINES = 60
     }
 }

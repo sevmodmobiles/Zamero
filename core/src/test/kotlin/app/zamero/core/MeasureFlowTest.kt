@@ -9,7 +9,7 @@ class MeasureFlowTest {
 
     @Test
     fun `readings fill fields in order and advance automatically`() {
-        var room = Room("r", "Кухня", openings = listOf(Opening(OpeningType.WINDOW)))
+        var room = Room("r", "Кухня", openings = listOf(Opening(OpeningType.WINDOW))).withOutline(Outlines.RECTANGLE)
         var target = MeasureFlow.nextEmpty(room)
         val readings = listOf(3.1, 2.8, 3.1, 2.8, 2.7, 1.5, 1.4)
         for (v in readings) {
@@ -26,7 +26,7 @@ class MeasureFlowTest {
 
     @Test
     fun `re-measuring a field jumps to the next empty one`() {
-        var room = Room("r", "Кухня")
+        var room = Room("r", "Кухня").withOutline(Outlines.RECTANGLE)
         room = MeasureFlow.set(room, MeasureTarget.Wall(0), laser(3.0))
         room = MeasureFlow.set(room, MeasureTarget.Wall(1), laser(2.0))
         val (_, next) = MeasureFlow.record(room, MeasureTarget.Wall(0), laser(3.05))
@@ -34,10 +34,10 @@ class MeasureFlowTest {
     }
 
     @Test
-    fun `changing shape keeps measured walls`() {
-        val room = MeasureFlow.set(Room("r", "Зал"), MeasureTarget.Wall(0), laser(5.0)).withShape(Shape.L_SHAPE)
-        assertEquals(6, room.walls.size)
-        assertEquals(5.0, room.walls[0]!!.meters)
+    fun `redrawing with the same wall count keeps measurements`() {
+        val room = MeasureFlow.set(Room("r", "Зал").withOutline(Outlines.RECTANGLE), MeasureTarget.Wall(0), laser(5.0))
+        assertEquals(5.0, room.withOutline(Outlines.RECTANGLE.reversed()).walls[0]!!.meters)
+        assertEquals(List(6) { null }, room.withOutline(Outlines.L_SHAPE).walls)
     }
 
     @Test

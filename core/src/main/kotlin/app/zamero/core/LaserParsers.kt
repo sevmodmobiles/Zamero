@@ -37,3 +37,6 @@ object LaserParsers {
 
     const val MAX_RANGE_M = 300.0
 }
+
+/** Байты в виде «F1 01 0A» — для журнала неизвестных дальномеров. */
+fun ByteArray.toHex(): String = joinToString(" ") { "%02X".format(it.toInt() and 0xFF) }
