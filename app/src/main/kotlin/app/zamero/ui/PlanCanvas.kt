@@ -145,7 +145,8 @@ fun PlanCanvas(
     selected: MeasureTarget?,
     onOutline: (List<Point>) -> Unit,
     onRoute: (List<Point>) -> Unit,
-    onTap: (MeasureTarget) -> Unit,
+    /** Нажатие на линию: что выбрано и где палец (координаты холста) — для меню. */
+    onTap: (MeasureTarget, Offset) -> Unit,
     onColumnTap: (String) -> Unit,
     modifier: Modifier = Modifier,
     /** Этап «Инженерия»: стены и колонны — бледный фон, активны только трассы. */
@@ -307,7 +308,7 @@ fun PlanCanvas(
                         when (toolState) {
                             Tool.SELECT -> when {
                                 hitColumn != null && !engineeringStage -> onColumnTapState(hitColumn.first.id)
-                                else -> best?.let(onTapState)
+                                else -> best?.let { onTapState(it, pos) }
                             }
                             Tool.ERASE -> when {
                                 // Стираем линии (участки) и колонны, точки — нет.

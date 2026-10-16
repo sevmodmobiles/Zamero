@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -42,6 +43,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -72,6 +75,48 @@ import app.zamero.laser.LaserState
 import java.util.Locale
 import java.util.UUID
 import kotlin.math.atan2
+import kotlin.math.roundToInt
+
+/** Контекстное меню линии: длина (изменить), свойства, удалить. */
+@Composable
+private fun LineMenu(
+    room: Room,
+    target: MeasureTarget,
+    onDismiss: () -> Unit,
+    onLength: () -> Unit,
+    onProperties: (EngElement) -> Unit,
+    onDelete: () -> Unit,
+) {
+    val value = MeasureFlow.valueOf(room, target)
+    val element = (target as? MeasureTarget.EngSegment)?.let { t -> room.engineering.firstOrNull { it.id == t.elementId } }
+    DropdownMenu(expanded = true, onDismissRequest = onDismiss) {
+        Text(
+            MeasureFlow.label(room, target),
+            style = MaterialTheme.typography.labelLarge,
+            color = targetColor(room, target) ?: MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+        )
+        DropdownMenuItem(
+            text = { Text("Длина: " + (value?.let { fmtMm(it.meters) } ?: "ввести") + "  ✎") },
+            onClick = onLength,
+        )
+        if (element != null && element.type != EngType.LINE) {
+            DropdownMenuItem(text = { Text("Свойства…") }, onClick = { onProperties(element) })
+        }
+        if (target is MeasureTarget.Wall) {
+            DropdownMenuItem(
+                text = { Text("Удалить — нельзя для стены контура", color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                onClick = {},
+                enabled = false,
+            )
+        } else {
+            DropdownMenuItem(
+                text = { Text("Удалить", color = MaterialTheme.colorScheme.error) },
+                onClick = onDelete,
+            )
+        }
+    }
+}
 
 /** Окно параметров инженерии: новый элемент выбранного типа или правка существующего. */
 private data class EngEdit(val type: EngType, val element: EngElement?)
@@ -89,6 +134,8 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
     var measureA by remember(room.id) { mutableStateOf<Point?>(null) }
     var measureB by remember(room.id) { mutableStateOf<Point?>(null) }
     var moreMenu by remember { mutableStateOf(false) }
+    // Меню у пальца после нажатия на линию: длина, свойства, удалить.
+    var lineMenu by remember(room.id) { mutableStateOf<Pair<MeasureTarget, Offset>?>(null) }
     // «Дорисовать»: рисуем линию, потом выбираем, что это, потом параметры.
     var drawingExtra by remember(room.id) { mutableStateOf(false) }
     var extraRoute by remember(room.id) { mutableStateOf<List<Point>?>(null) }
@@ -162,81 +209,98 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                     }
                 }
             }
-            PlanCanvas(
-                room = room,
-                mode = mode,
-                selected = target,
-                onOutline = { stroke ->
-                    val poly = Straighten.polygon(stroke)
-                    if (poly == null) {
-                        Toast.makeText(context, "Не получилось распознать контур — нарисуйте замкнутую фигуру крупнее", Toast.LENGTH_SHORT).show()
-                    } else {
-                        vm.setOutline(poly)
-                        redrawing = false
-                    }
-                },
-                onRoute = { planStroke ->
-                    val plan = Plan.room(room) ?: return@PlanCanvas
-                    // Маленькая замкнутая фигура в режиме «Дорисовать» — это колонна.
-                    if (routing == null && !eng) {
-                        val col = Columns.detect(planStroke, Columns.baseAngle(plan))
-                        if (col != null && maxOf(col.width, col.depth) < planDiagonal(plan) * 0.35) {
-                            drawingExtra = false
-                            newColumn = col
-                            return@PlanCanvas
+            Box(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 8.dp)) {
+                PlanCanvas(
+                    room = room,
+                    mode = mode,
+                    selected = target ?: lineMenu?.first,
+                    onOutline = { stroke ->
+                        val poly = Straighten.polygon(stroke)
+                        if (poly == null) {
+                            Toast.makeText(context, "Не получилось распознать контур — нарисуйте замкнутую фигуру крупнее", Toast.LENGTH_SHORT).show()
+                        } else {
+                            vm.setOutline(poly)
+                            redrawing = false
                         }
-                    }
-                    val line = straightenAndSnap(room, plan, planStroke, excludeId = routing?.id)
-                    if (line == null) {
-                        Toast.makeText(context, "Линия слишком короткая — проведите длиннее", Toast.LENGTH_SHORT).show()
-                        return@PlanCanvas
-                    }
-                    val sketch = line.map { Plan.toSketch(room, plan, it) }
-                    if (routing != null) {
-                        vm.setRoute(routing.id, sketch)
-                    } else {
-                        drawingExtra = false
-                        extraRoute = sketch
-                    }
-                },
-                onTap = vm::openDialog,
-                onColumnTap = { openColumnId = it },
-                engineeringStage = eng,
-                tool = tool,
-                hiddenSystems = vm.hiddenSystems,
-                onPointMove = vm::movePoint,
-                onErase = { hit ->
-                    when (hit) {
-                        is EraseHit.PointHit -> {
-                            if (hit.ref is PointRef.Vertex && room.outline.size <= 3) {
-                                Toast.makeText(context, "У контура должно остаться хотя бы 3 точки", Toast.LENGTH_SHORT).show()
-                            } else {
-                                vm.deletePoint(hit.ref)
+                    },
+                    onRoute = { planStroke ->
+                        val plan = Plan.room(room) ?: return@PlanCanvas
+                        // Маленькая замкнутая фигура в режиме «Дорисовать» — это колонна.
+                        if (routing == null && !eng) {
+                            val col = Columns.detect(planStroke, Columns.baseAngle(plan))
+                            if (col != null && maxOf(col.width, col.depth) < planDiagonal(plan) * 0.35) {
+                                drawingExtra = false
+                                newColumn = col
+                                return@PlanCanvas
                             }
                         }
-                        is EraseHit.ColumnHit -> vm.deleteColumn(hit.id)
-                        is EraseHit.Segment -> when (val t = hit.target) {
-                            is MeasureTarget.EngSegment -> vm.deleteSegment(t.elementId, t.index)
-                            else -> Toast.makeText(
-                                context,
-                                "Стену контура стереть нельзя — потяните за её точки или перерисуйте контур",
-                                Toast.LENGTH_LONG,
-                            ).show()
+                        val line = straightenAndSnap(room, plan, planStroke, excludeId = routing?.id)
+                        if (line == null) {
+                            Toast.makeText(context, "Линия слишком короткая — проведите длиннее", Toast.LENGTH_SHORT).show()
+                            return@PlanCanvas
                         }
+                        val sketch = line.map { Plan.toSketch(room, plan, it) }
+                        if (routing != null) {
+                            vm.setRoute(routing.id, sketch)
+                        } else {
+                            drawingExtra = false
+                            extraRoute = sketch
+                        }
+                    },
+                    onTap = { t, pos -> lineMenu = t to pos },
+                    onColumnTap = { openColumnId = it },
+                    engineeringStage = eng,
+                    tool = tool,
+                    hiddenSystems = vm.hiddenSystems,
+                    onPointMove = vm::movePoint,
+                    onErase = { hit ->
+                        when (hit) {
+                            is EraseHit.PointHit -> {
+                                if (hit.ref is PointRef.Vertex && room.outline.size <= 3) {
+                                    Toast.makeText(context, "У контура должно остаться хотя бы 3 точки", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    vm.deletePoint(hit.ref)
+                                }
+                            }
+                            is EraseHit.ColumnHit -> vm.deleteColumn(hit.id)
+                            is EraseHit.Segment -> when (val t = hit.target) {
+                                is MeasureTarget.EngSegment -> vm.deleteSegment(t.elementId, t.index)
+                                else -> Toast.makeText(
+                                    context,
+                                    "Стену контура стереть нельзя — потяните за её точки или перерисуйте контур",
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                            }
+                        }
+                    },
+                    measureA = measureA,
+                    measureB = measureB,
+                    onMeasureTap = { p ->
+                        if (measureA == null || measureB != null) {
+                            measureA = p
+                            measureB = null
+                        } else {
+                            measureB = p
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize(),
+                )
+                lineMenu?.let { (t, pos) ->
+                    Box(Modifier.offset { IntOffset(pos.x.roundToInt(), pos.y.roundToInt()) }.size(1.dp)) {
+                        LineMenu(
+                            room = room,
+                            target = t,
+                            onDismiss = { lineMenu = null },
+                            onLength = { lineMenu = null; vm.openDialog(t) },
+                            onProperties = { e -> lineMenu = null; engEdit = EngEdit(e.type, e) },
+                            onDelete = {
+                                lineMenu = null
+                                if (t is MeasureTarget.EngSegment) vm.deleteSegment(t.elementId, t.index)
+                            },
+                        )
                     }
-                },
-                measureA = measureA,
-                measureB = measureB,
-                onMeasureTap = { p ->
-                    if (measureA == null || measureB != null) {
-                        measureA = p
-                        measureB = null
-                    } else {
-                        measureB = p
-                    }
-                },
-                modifier = Modifier.fillMaxWidth().weight(1f).padding(horizontal = 8.dp),
-            )
+                }
+            }
             if (mode == CanvasMode.VIEW) {
                 EditorToolbar {
                     ToolButton("↶", "Назад", enabled = vm.canUndo, onClick = vm::undo)
