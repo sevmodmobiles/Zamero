@@ -3,6 +3,31 @@ package app.zamero.core
 /** Форма сечения: круглое, прямоугольное или без сечения (стены, линии). */
 enum class Section { ROUND, RECT, NONE }
 
+/** Инженерная система — слой чертежа. [code] — префикс слоя в DXF. */
+enum class Discipline(val title: String, val code: String) {
+    EOM("ЭОМ", "EOM"),
+    OVIK("ОВиК", "OVIK"),
+    VK("ВК", "VK"),
+    ;
+
+    companion object {
+        /** Система по умолчанию для типа (для старых данных без системы). */
+        fun defaultFor(type: EngType): Discipline? = when (type) {
+            EngType.TRAY -> EOM
+            EngType.DUCT_RECT, EngType.DUCT_ROUND, EngType.DRAIN -> OVIK
+            EngType.PIPE -> VK
+            else -> null
+        }
+
+        /** Что можно проложить в каждой системе — для окна выбора. */
+        val choices: List<Pair<Discipline, List<EngType>>> = listOf(
+            EOM to listOf(EngType.TRAY),
+            OVIK to listOf(EngType.DUCT_RECT, EngType.DUCT_ROUND, EngType.PIPE, EngType.DRAIN),
+            VK to listOf(EngType.PIPE, EngType.DRAIN),
+        )
+    }
+}
+
 /** Строительные элементы (дорисованные стены) или инженерные сети. */
 enum class Category { CONSTRUCTION, ENGINEERING }
 
@@ -45,6 +70,8 @@ data class EngElement(
     /** Отметка (высота оси или низа) от чистого пола, мм. */
     val elevationMm: Int? = null,
     val note: String = "",
+    /** Система (слой) инженерной линии; у стен и линий — null. */
+    val system: Discipline? = Discipline.defaultFor(type),
 ) {
     init {
         require(segments.size == (route.size - 1).coerceAtLeast(0)) { "segments must match route" }
@@ -72,6 +99,9 @@ data class EngElement(
             if (sectionText.isNotEmpty()) append(' ').append(sectionText)
             elevationMm?.let { append(", h=").append(it) }
         }
+
+    /** Слой DXF: система + тип, например «OVIK_DUCT_RECT». */
+    val dxfLayer: String get() = system?.let { "${it.code}_${type.layer}" } ?: type.layer
 
     val totalLength: Double? get() = if (segments.all { it != null }) segments.sumOf { it!!.meters } else null
 }

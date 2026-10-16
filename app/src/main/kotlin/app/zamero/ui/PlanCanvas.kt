@@ -48,6 +48,7 @@ import app.zamero.core.Category
 import app.zamero.core.Column
 import app.zamero.core.ColumnPlan
 import app.zamero.core.Columns
+import app.zamero.core.Discipline
 import app.zamero.core.Edit
 import app.zamero.core.EngElement
 import app.zamero.core.EngType
@@ -62,6 +63,16 @@ import kotlin.math.hypot
 import kotlin.math.min
 
 enum class CanvasMode { VIEW, DRAW_OUTLINE, DRAW_ROUTE, DRAW_EXTRA }
+
+/** Цвет слоя инженерной системы. */
+internal fun systemColor(d: Discipline): Color = when (d) {
+    Discipline.EOM -> Color(0xFFF57C00)
+    Discipline.OVIK -> Color(0xFF00ACC1)
+    Discipline.VK -> Color(0xFF1E88E5)
+}
+
+/** Цвет линии: инженерия — по системе (слою), стены и линии — по типу. */
+internal fun engColor(e: EngElement): Color = e.system?.let(::systemColor) ?: engColor(e.type)
 
 /** Цвет инженерной линии по типу. */
 internal fun engColor(type: EngType): Color = when (type) {
@@ -140,6 +151,8 @@ fun PlanCanvas(
     /** Этап «Инженерия»: стены и колонны — бледный фон, активны только трассы. */
     engineeringStage: Boolean = false,
     tool: Tool = Tool.SELECT,
+    /** Выключенные слои инженерии — не рисуются и не нажимаются. */
+    hiddenSystems: Set<Discipline> = emptySet(),
     onPointMove: (PointRef, Point, Double) -> Unit = { _, _, _ -> },
     onErase: (EraseHit) -> Unit = {},
     measureA: Point? = null,
@@ -163,7 +176,8 @@ fun PlanCanvas(
     val snapMeters = handleRadius * view.metersPerPx()
 
     // На этапе «Помещения» инженерию не показываем; на этапе «Инженерия» дорисованные стены — фон.
-    fun visible(e: EngElement) = engineeringStage || e.type.category != Category.ENGINEERING
+    fun visible(e: EngElement) =
+        if (e.type.category == Category.ENGINEERING) engineeringStage && e.system?.let { it !in hiddenSystems } != false else true
     fun isActive(e: EngElement) = (e.type.category == Category.ENGINEERING) == engineeringStage
     fun draggable(r: PointRef) = when (r) {
         is PointRef.Vertex -> !engineeringStage
@@ -295,13 +309,10 @@ fun PlanCanvas(
                                 hitColumn != null && !engineeringStage -> onColumnTapState(hitColumn.first.id)
                                 else -> best?.let(onTapState)
                             }
-                            Tool.ERASE -> {
-                                val point = nearestPoint(currentHandles, pos, handleRadius)
-                                when {
-                                    point != null -> onEraseState(EraseHit.PointHit(point.first))
-                                    hitColumn != null && !engineeringStage -> onEraseState(EraseHit.ColumnHit(hitColumn.first.id))
-                                    else -> best?.let { onEraseState(EraseHit.Segment(it)) }
-                                }
+                            Tool.ERASE -> when {
+                                // Стираем линии (участки) и колонны, точки — нет.
+                                best != null -> onEraseState(EraseHit.Segment(best!!))
+                                hitColumn != null && !engineeringStage -> onEraseState(EraseHit.ColumnHit(hitColumn.first.id))
                             }
                             Tool.MEASURE -> {
                                 // Точка замера прилипает к ближайшей активной точке.
@@ -353,7 +364,7 @@ fun PlanCanvas(
             }
             routes.forEach { (e, pts) ->
                 val active = isActive(e)
-                val color = engColor(e.type).copy(alpha = if (active) 1f else wallAlpha)
+                val color = engColor(e).copy(alpha = if (active) 1f else wallAlpha)
                 val dash = if (e.type == EngType.DRAIN) PathEffect.dashPathEffect(floatArrayOf(18f, 10f)) else null
                 val width = when (e.type) {
                     EngType.WALL -> 5.dp
@@ -393,12 +404,12 @@ fun PlanCanvas(
                 drawColumn(toScreen, cp, col, selected, measurer, labelBg, "К${shown.columns.indexOf(col) + 1}", faded = engineeringStage)
             }
             // Активные точки — за них можно тянуть, к ним прилипают линии и линейка.
-            if (mode == CanvasMode.VIEW) {
+            if (mode == CanvasMode.VIEW && tool != Tool.ERASE) {
                 handles.forEach { (r, p) ->
                     val active = r == dragRef
                     val radius = (if (active) 8.dp else 5.dp).toPx()
                     drawCircle(if (active) strokeColor else handleFill, radius, p)
-                    drawCircle(if (tool == Tool.ERASE) Color(0xFFE53935) else handleStroke, radius, p, style = Stroke(1.5.dp.toPx()))
+                    drawCircle(handleStroke, radius, p, style = Stroke(1.5.dp.toPx()))
                 }
             }
             // Линейка.

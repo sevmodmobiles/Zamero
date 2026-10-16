@@ -23,6 +23,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Surface
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -50,6 +51,7 @@ import app.zamero.core.Category
 import app.zamero.core.Column as ColumnModel
 import app.zamero.core.ColumnDim
 import app.zamero.core.Columns
+import app.zamero.core.Discipline
 import app.zamero.core.Edit
 import app.zamero.core.Measure
 import app.zamero.core.Source
@@ -91,6 +93,7 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
     var drawingExtra by remember(room.id) { mutableStateOf(false) }
     var extraRoute by remember(room.id) { mutableStateOf<List<Point>?>(null) }
     var extraType by remember(room.id) { mutableStateOf<EngType?>(null) }
+    var extraSystem by remember(room.id) { mutableStateOf<Discipline?>(null) }
     // Колонна, распознанная в рисунке (координаты плана, м), и открытая колонна.
     var newColumn by remember(room.id) { mutableStateOf<Columns.Detected?>(null) }
     var openColumnId by remember(room.id) { mutableStateOf<String?>(null) }
@@ -134,7 +137,7 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                     CanvasMode.DRAW_EXTRA -> if (eng) "Проведите трассу пальцем — она выровняется вдоль стен" else "Дорисуйте стену или перегородку; обведите колонну"
                     CanvasMode.VIEW -> when (tool) {
                         Tool.SELECT -> summary(room, eng) + " · точки можно тянуть"
-                        Tool.ERASE -> "Стереть: нажмите на точку, линию или колонну"
+                        Tool.ERASE -> "Стереть: нажмите на линию или колонну"
                         Tool.MEASURE -> if (measureB == null) "Размер: нажмите две точки на плане" else "Размер: нажмите новую точку, чтобы перемерить"
                     }
                 },
@@ -142,6 +145,23 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
             )
+            if (eng) {
+                Row(
+                    Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Слои:", style = MaterialTheme.typography.labelLarge)
+                    Discipline.entries.forEach { d ->
+                        FilterChip(
+                            selected = d !in vm.hiddenSystems,
+                            onClick = { vm.toggleSystem(d) },
+                            label = { Text(d.title) },
+                            leadingIcon = { Box(Modifier.size(10.dp).background(systemColor(d), CircleShape)) },
+                        )
+                    }
+                }
+            }
             PlanCanvas(
                 room = room,
                 mode = mode,
@@ -183,6 +203,7 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                 onColumnTap = { openColumnId = it },
                 engineeringStage = eng,
                 tool = tool,
+                hiddenSystems = vm.hiddenSystems,
                 onPointMove = vm::movePoint,
                 onErase = { hit ->
                     when (hit) {
@@ -195,10 +216,10 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                         }
                         is EraseHit.ColumnHit -> vm.deleteColumn(hit.id)
                         is EraseHit.Segment -> when (val t = hit.target) {
-                            is MeasureTarget.EngSegment -> vm.deleteEngineering(t.elementId)
+                            is MeasureTarget.EngSegment -> vm.deleteSegment(t.elementId, t.index)
                             else -> Toast.makeText(
                                 context,
-                                "Стену контура стереть нельзя — сотрите её точку или перерисуйте контур",
+                                "Стену контура стереть нельзя — потяните за её точки или перерисуйте контур",
                                 Toast.LENGTH_LONG,
                             ).show()
                         }
@@ -366,32 +387,33 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
             title = { Text(if (eng) "Что прокладываем?" else "Что дорисовали?") },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
-                    // Инженерия — по группам: лотки, вентиляция, трубы.
-                    val groups = if (eng) {
-                        listOf(
-                            "Лотки" to listOf(EngType.TRAY),
-                            "Вентиляция" to listOf(EngType.DUCT_RECT, EngType.DUCT_ROUND),
-                            "Трубы" to listOf(EngType.PIPE, EngType.DRAIN),
-                        )
+                    // Инженерия — по системам (слоям): ЭОМ, ОВиК, ВК.
+                    val groups: List<Pair<Discipline?, List<EngType>>> = if (eng) {
+                        Discipline.choices
                     } else {
-                        listOf("" to EngType.entries.filter { it.category == Category.CONSTRUCTION })
+                        listOf(null to EngType.entries.filter { it.category == Category.CONSTRUCTION })
                     }
-                    groups.forEach { (header, types) ->
-                        if (header.isNotEmpty()) {
-                            Text(
-                                header,
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
-                            )
+                    groups.forEach { (system, types) ->
+                        if (system != null) {
+                            Row(
+                                Modifier.padding(top = 10.dp, bottom = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Box(Modifier.size(10.dp).background(systemColor(system), CircleShape))
+                                Text(system.title, style = MaterialTheme.typography.labelLarge, color = systemColor(system))
+                            }
                         }
                         types.forEach { type ->
                             Row(
-                                Modifier.fillMaxWidth().clickable { extraType = type }.padding(vertical = 9.dp),
+                                Modifier.fillMaxWidth().clickable {
+                                    extraSystem = system
+                                    extraType = type
+                                }.padding(start = if (system != null) 18.dp else 0.dp, top = 9.dp, bottom = 9.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                             ) {
-                                Box(Modifier.size(14.dp).background(engColor(type), CircleShape))
+                                if (system == null) Box(Modifier.size(14.dp).background(engColor(type), CircleShape))
                                 Text(type.title)
                             }
                         }
@@ -409,11 +431,13 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
             initial = null,
             confirmText = "Сохранить",
             onSave = { params ->
-                vm.addElement(pendingType, params, pendingRoute)
+                vm.addElement(pendingType, params, pendingRoute, extraSystem)
                 extraRoute = null
                 extraType = null
             },
             onDismiss = { extraRoute = null; extraType = null },
+            color = extraSystem?.let(::systemColor) ?: engColor(pendingType),
+            title = extraSystem?.let { "${it.title} · ${pendingType.title}" } ?: pendingType.title,
         )
     }
     if (renaming) {
@@ -501,7 +525,7 @@ private fun summary(room: Room, engineering: Boolean): String {
 
 private fun targetColor(room: Room, target: MeasureTarget): Color? = when (target) {
     is MeasureTarget.Wall -> wallColor(target.index, room.walls.size)
-    is MeasureTarget.EngSegment -> room.engineering.firstOrNull { it.id == target.elementId }?.let { engColor(it.type) }
+    is MeasureTarget.EngSegment -> room.engineering.firstOrNull { it.id == target.elementId }?.let { engColor(it) }
     is MeasureTarget.ColumnValue -> ColumnColor
     else -> null
 }
@@ -536,7 +560,7 @@ private fun MeasureList(
                 t is MeasureTarget.EngSegment && t.index == 0 -> {
                     val e = room.engineering.first { it.id == t.elementId }
                     item(key = "eng-${e.id}") {
-                        SectionHeader("${MeasureFlow.engTitle(room, e.id)} · ${e.label.removePrefix(e.type.title).trimStart(',', ' ')}", engColor(e.type)) {
+                        SectionHeader("${MeasureFlow.engTitle(room, e.id)} · ${e.label.removePrefix(e.type.title).trimStart(',', ' ')}" + (e.system?.let { " · ${it.title}" } ?: ""), engColor(e)) {
                             TextButton(onClick = { onEditEng(e) }) { Text("Изм.") }
                             TextButton(onClick = { onStartRoute(e) }) { Text("Трасса") }
                             TextButton(onClick = { vm.deleteEngineering(e.id) }) { Text("Удал.") }

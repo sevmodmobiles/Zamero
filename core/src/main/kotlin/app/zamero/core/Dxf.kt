@@ -31,7 +31,9 @@ object Dxf {
 
     fun build(project: Project): String {
         val w = Writer()
-        val layers = baseLayers + EngType.entries.map { Layer(it.layer, it.dxfColor) }
+        val layers = baseLayers +
+            EngType.entries.filter { it.category == Category.CONSTRUCTION }.map { Layer(it.layer, it.dxfColor) } +
+            Discipline.choices.flatMap { (d, types) -> types.map { Layer("${d.code}_${it.layer}", it.dxfColor) } }
 
         w.section("HEADER") {
             pair(9, "\$ACADVER"); pair(1, "AC1009")
@@ -100,14 +102,15 @@ object Dxf {
                     val w = Footprint.width(e)
                     if (w != null) {
                         // Проекция на пол в реальную ширину, ось — на слое осей.
-                        polyline(Footprint.outline(meters, w).map(::tx), closed = true, layer = e.type.layer)
+                        polyline(Footprint.outline(meters, w).map(::tx), closed = true, layer = e.dxfLayer)
                         polyline(pts, closed = false, layer = "AXES")
                     } else {
-                        polyline(pts, closed = false, layer = e.type.layer)
+                        polyline(pts, closed = false, layer = e.dxfLayer)
                     }
                     val a = pts[0]
                     val b = pts[1]
-                    text((a.x + b.x) / 2, (a.y + b.y) / 2 + 60, SMALL_TEXT_MM, e.label, e.type.layer)
+                    val caption = (e.system?.let { "${it.title}: " } ?: "") + e.label
+                    text((a.x + b.x) / 2, (a.y + b.y) / 2 + 60, SMALL_TEXT_MM, caption, e.dxfLayer)
                 }
                 // Колонны: контур, оси и привязки к стенам.
                 room.columns.forEachIndexed { i, col ->

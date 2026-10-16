@@ -34,7 +34,7 @@ class DxfTest {
         assertEquals(lines.count { it == "POLYLINE" }, lines.count { it == "SEQEND" })
         // Стены + воздуховод (контур в реальную ширину и ось); комната без контура пропущена.
         assertEquals(3, lines.count { it == "POLYLINE" })
-        assertTrue("DUCT_RECT" in lines)
+        assertTrue("OVIK_DUCT_RECT" in lines)
     }
 
     @Test
@@ -50,7 +50,7 @@ class DxfTest {
         val bytes = Dxf.export(project)
         val text = String(bytes, Dxf.CHARSET)
         assertTrue("Кухня" in text)
-        assertTrue("Воздуховод прямоугольный 200x100" in text)
+        assertTrue("ОВиК: Воздуховод прямоугольный 200x100" in text)
         assertTrue('?' !in text, "все символы должны кодироваться в windows-1251")
         assertEquals("%%c110", Dxf.cadText("Ø110"))
     }

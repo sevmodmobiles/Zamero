@@ -7,6 +7,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.zamero.core.Column
+import app.zamero.core.Discipline
 import app.zamero.core.Edit
 import app.zamero.core.EngElement
 import app.zamero.core.EngType
@@ -189,8 +190,8 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     /** Дорисованный элемент: трасса уже есть (координаты эскиза). */
-    fun addElement(type: EngType, params: EngParams, route: List<Point>) {
-        val e = params.applyTo(EngElement(id = UUID.randomUUID().toString(), type = type)).withRoute(route)
+    fun addElement(type: EngType, params: EngParams, route: List<Point>, system: Discipline? = Discipline.defaultFor(type)) {
+        val e = params.applyTo(EngElement(id = UUID.randomUUID().toString(), type = type, system = system)).withRoute(route)
         editRoom { copy(engineering = engineering + e) }
     }
 
@@ -267,6 +268,22 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     fun movePoint(ref: PointRef, target: Point, snap: Double) = editRoom { Edit.movePoint(this, ref, target, snap) }
 
     fun deletePoint(ref: PointRef) = editRoom { Edit.deletePoint(Edit.rebase(this), ref) }
+
+    /** Стирает участок линии (крайний — укорачивает, средний — делит линию на две). */
+    fun deleteSegment(elementId: String, index: Int) {
+        dialogTarget = null
+        editRoom { Edit.deleteSegment(this, elementId, index, UUID.randomUUID().toString()) }
+    }
+
+    // --- Слои инженерии ------------------------------------------------------
+
+    /** Скрытые слои (системы) на этапе «Инженерия». */
+    var hiddenSystems by mutableStateOf(emptySet<Discipline>())
+        private set
+
+    fun toggleSystem(d: Discipline) {
+        hiddenSystems = if (d in hiddenSystems) hiddenSystems - d else hiddenSystems + d
+    }
 
     // --- Обновление ----------------------------------------------------------
 

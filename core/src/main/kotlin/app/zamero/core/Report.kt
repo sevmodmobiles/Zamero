@@ -36,7 +36,8 @@ object Report {
                 val segs = e.segments.joinToString(" + ") { it?.millimeters?.toString() ?: "?" }
                 val total = e.totalLength?.let { " = ${mm(it)}" } ?: ""
                 val details = e.label.removePrefix(e.type.title).trimStart(',', ' ')
-                appendLine("  • ${MeasureFlow.engTitle(room, e.id)}${if (details.isNotEmpty()) ": $details" else ""}")
+                val system = e.system?.let { "[${it.title}] " } ?: ""
+                appendLine("  • $system${MeasureFlow.engTitle(room, e.id)}${if (details.isNotEmpty()) ": $details" else ""}")
                 if (e.segments.isNotEmpty()) appendLine("    участки: $segs$total")
                 if (e.note.isNotBlank()) appendLine("    ${e.note}")
             }

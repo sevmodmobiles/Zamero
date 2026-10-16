@@ -50,6 +50,9 @@ fun EngParamsDialog(
     initial: EngElement?,
     confirmText: String,
     onSave: (EngParams) -> Unit,
+    color: androidx.compose.ui.graphics.Color = engColor(type),
+    /** Заголовок окна, например «ОВиК · Труба». */
+    title: String = type.title,
     onDismiss: () -> Unit,
 ) {
     var diameter by remember { mutableStateOf(initial?.diameterMm?.toString() ?: "") }
@@ -64,8 +67,8 @@ fun EngParamsDialog(
         onDismissRequest = onDismiss,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Box(Modifier.size(18.dp).background(engColor(type), CircleShape))
-                Text(type.title)
+                Box(Modifier.size(18.dp).background(color, CircleShape))
+                Text(title)
             }
         },
         text = {

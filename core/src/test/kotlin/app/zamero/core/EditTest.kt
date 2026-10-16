@@ -80,4 +80,24 @@ class EditTest {
         r = Edit.deletePoint(r, PointRef.RoutePoint("p", 0))
         assertEquals(0, r.engineering.size)
     }
+
+    @Test
+    fun `erasing segments shortens or splits the line`() {
+        val line = EngElement("t", EngType.TRAY, widthMm = 200, heightMm = 60)
+            .withRoute(listOf(Point(0.0, 0.0), Point(100.0, 0.0), Point(100.0, 100.0), Point(200.0, 100.0)))
+            .copy(segments = listOf(m(1.0), m(1.0), m(1.0)))
+        val r = room().copy(engineering = listOf(line))
+        // Средний участок — две линии с теми же свойствами.
+        val split = Edit.deleteSegment(r, "t", 1, "t2")
+        assertEquals(listOf("t", "t2"), split.engineering.map { it.id })
+        assertEquals(2, split.engineering[0].route.size)
+        assertEquals(2, split.engineering[1].route.size)
+        assertEquals(200, split.engineering[1].widthMm)
+        // Крайний — укорачивается.
+        val shorter = Edit.deleteSegment(r, "t", 0, "x")
+        assertEquals(listOf("t"), shorter.engineering.map { it.id })
+        assertEquals(3, shorter.engineering[0].route.size)
+        // Единственный — линия исчезает.
+        assertEquals(0, Edit.deleteSegment(Edit.deleteSegment(split, "t", 0, "y"), "t2", 0, "z").engineering.size)
+    }
 }

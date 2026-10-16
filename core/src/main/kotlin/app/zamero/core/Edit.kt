@@ -182,5 +182,27 @@ object Edit {
         }
     }
 
+    /**
+     * Стирает участок [index] линии: крайний — линия укорачивается, средний — линия
+     * делится на две (вторая получает [newId]), единственный — линия удаляется.
+     */
+    fun deleteSegment(room: Room, elementId: String, index: Int, newId: String): Room {
+        val e = room.engineering.firstOrNull { it.id == elementId } ?: return room
+        if (index !in e.segments.indices) return room
+        val parts = listOf(
+            e.route.subList(0, index + 1) to e.segments.subList(0, index),
+            e.route.subList(index + 1, e.route.size) to e.segments.subList(index + 1, e.segments.size),
+        ).filter { (route, _) -> route.size >= 2 }
+        val replaced = parts.mapIndexed { i, (route, segments) ->
+            e.copy(id = if (i == 0) e.id else newId, route = route.toList(), segments = segments.toList())
+        }
+        val at = room.engineering.indexOf(e)
+        val list = room.engineering.toMutableList().apply {
+            removeAt(at)
+            addAll(at, replaced)
+        }
+        return room.copy(engineering = list)
+    }
+
     private fun dist(a: Point, b: Point) = hypot(b.x - a.x, b.y - a.y)
 }

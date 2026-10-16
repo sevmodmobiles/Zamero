@@ -2,6 +2,7 @@ package app.zamero.data
 
 import android.content.Context
 import app.zamero.core.Column
+import app.zamero.core.Discipline
 import app.zamero.core.EngElement
 import app.zamero.core.EngType
 import app.zamero.core.Measure
@@ -101,13 +102,15 @@ class ProjectStore(context: Context) {
         .put("height", heightMm ?: JSONObject.NULL)
         .put("elevation", elevationMm ?: JSONObject.NULL)
         .put("note", note)
+        .put("system", system?.name ?: JSONObject.NULL)
 
     private fun JSONObject.toEng(): EngElement {
+        val type = EngType.valueOf(getString("type"))
         val route = getJSONArray("route").points()
         val segs = getJSONArray("segments").let { arr -> List(arr.length()) { arr.optJSONObject(it).toMeasure() } }
         return EngElement(
             id = getString("id"),
-            type = EngType.valueOf(getString("type")),
+            type = type,
             route = route,
             segments = List((route.size - 1).coerceAtLeast(0)) { segs.getOrNull(it) },
             diameterMm = optIntOrNull("diameter"),
@@ -115,6 +118,7 @@ class ProjectStore(context: Context) {
             heightMm = optIntOrNull("height"),
             elevationMm = optIntOrNull("elevation"),
             note = optString("note"),
+            system = if (isNull("system") || !has("system")) Discipline.defaultFor(type) else Discipline.valueOf(getString("system")),
         )
     }
 
