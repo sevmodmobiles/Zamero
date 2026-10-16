@@ -41,6 +41,7 @@ data class Room(
     val openings: List<Opening> = emptyList(),
     /** Инженерные линии, привязанные к плану этого помещения. */
     val engineering: List<EngElement> = emptyList(),
+    val columns: List<Column> = emptyList(),
 ) {
     init {
         require(walls.size == outline.size) { "walls.size must match outline" }

@@ -19,6 +19,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -41,6 +42,9 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.zamero.core.Column
+import app.zamero.core.ColumnPlan
+import app.zamero.core.Columns
 import app.zamero.core.EngType
 import app.zamero.core.MeasureTarget
 import app.zamero.core.Plan
@@ -109,6 +113,7 @@ fun PlanCanvas(
     onOutline: (List<Point>) -> Unit,
     onRoute: (List<Point>) -> Unit,
     onTap: (MeasureTarget) -> Unit,
+    onColumnTap: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
@@ -127,7 +132,10 @@ fun PlanCanvas(
         e to Plan.route(room, plan, e).map(view::toScreen)
     }
 
+    val columns = if (plan == null) emptyList() else room.columns.map { it to Columns.plan(room, plan, it) }
     val current by rememberUpdatedState(Triple(walls, routes, view))
+    val currentColumns by rememberUpdatedState(columns)
+    val onColumnTapState by rememberUpdatedState(onColumnTap)
     val onOutlineState by rememberUpdatedState(onOutline)
     val onRouteState by rememberUpdatedState(onRoute)
     val onTapState by rememberUpdatedState(onTap)
@@ -175,7 +183,14 @@ fun PlanCanvas(
                 detectTapGestures(
                     onDoubleTap = { zoom = 1f; pan = Offset.Zero },
                     onTap = { pos ->
-                        val (w, r, _) = current
+                        val (w, r, v) = current
+                        // Нажатие внутри колонны (или рядом с её центром) открывает колонну.
+                        val hitColumn = currentColumns.firstOrNull { (_, cp) ->
+                            val c = v.toScreen(cp.center)
+                            val half = maxOf(cp.width, cp.depth) / 2
+                            val edge = v.toScreen(Point(cp.center.x + cp.u.x * half, cp.center.y + cp.u.y * half))
+                            (pos - c).getDistance() <= maxOf((edge - c).getDistance(), hitRadius)
+                        }
                         var best: MeasureTarget? = null
                         var bestDist = hitRadius
                         // Инженерия лежит поверх стен — проверяем её первой и с небольшим приоритетом.
@@ -189,7 +204,10 @@ fun PlanCanvas(
                             val d = distanceToSegment(pos, a, b)
                             if (d < bestDist) { bestDist = d; best = MeasureTarget.Wall(i) }
                         }
-                        best?.let(onTapState)
+                        when {
+                            hitColumn != null -> onColumnTapState(hitColumn.first.id)
+                            else -> best?.let(onTapState)
+                        }
                     },
                 )
             }
@@ -198,6 +216,7 @@ fun PlanCanvas(
     Box(
         modifier
             .border(1.dp, outlineColor, RoundedCornerShape(12.dp))
+            .clipToBounds()
             .onSizeChanged { size = it }
             .then(gestures),
     ) {
@@ -231,6 +250,9 @@ fun PlanCanvas(
                     label(measurer, text, color, pts[i], pts[i + 1], outward = false, labelBg)
                 }
             }
+            columns.forEach { (col, cp) ->
+                drawColumn(view, cp, col, selected, measurer, labelBg, columnTitle = "К${room.columns.indexOf(col) + 1}")
+            }
             if (stroke.size > 1) {
                 val path = Path().apply {
                     moveTo(stroke[0].x, stroke[0].y)
@@ -240,6 +262,59 @@ fun PlanCanvas(
             }
         }
     }
+}
+
+internal val ColumnColor = Color(0xFFD32F2F)
+private val AxisColor = Color(0xFFE57373)
+
+/** Колонна: контур с заливкой, штриховые оси на всю комнату и размерные линии привязок. */
+private fun DrawScope.drawColumn(
+    view: View,
+    cp: ColumnPlan,
+    col: Column,
+    selected: MeasureTarget?,
+    measurer: TextMeasurer,
+    bg: Color,
+    columnTitle: String,
+) {
+    val sel = (selected as? MeasureTarget.ColumnValue)?.columnId == col.id
+    val c = view.toScreen(cp.center)
+    // Оси — тонкие штриховые линии через центр, далеко за пределы колонны.
+    val dash = PathEffect.dashPathEffect(floatArrayOf(14f, 8f, 3f, 8f))
+    val reach = 50.0
+    for (dir in listOf(cp.u, cp.v)) {
+        val a = view.toScreen(Point(cp.center.x - dir.x * reach, cp.center.y - dir.y * reach))
+        val b = view.toScreen(Point(cp.center.x + dir.x * reach, cp.center.y + dir.y * reach))
+        drawLine(AxisColor.copy(alpha = 0.6f), a, b, 1.dp.toPx(), pathEffect = dash)
+    }
+    val stroke = (if (sel) 4.dp else 2.5.dp).toPx()
+    if (cp.round) {
+        val r = (view.toScreen(Point(cp.center.x + cp.width / 2 * cp.u.x, cp.center.y + cp.width / 2 * cp.u.y)) - c).getDistance()
+        drawCircle(ColumnColor.copy(alpha = 0.25f), r, c)
+        drawCircle(ColumnColor, r, c, style = Stroke(stroke))
+    } else {
+        val path = Path().apply {
+            val pts = cp.corners.map(view::toScreen)
+            moveTo(pts[0].x, pts[0].y)
+            pts.drop(1).forEach { lineTo(it.x, it.y) }
+            close()
+        }
+        drawPath(path, ColumnColor.copy(alpha = 0.25f))
+        drawPath(path, ColumnColor, style = Stroke(stroke))
+    }
+    // Привязки: линия от стены до оси с длиной.
+    listOf(cp.footU to col.offsetU, cp.footV to col.offsetV).forEach { (foot, m) ->
+        if (foot == null) return@forEach
+        val f = view.toScreen(foot)
+        drawLine(ColumnColor, f, c, 1.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)))
+        drawCircle(ColumnColor, 3.dp.toPx(), f)
+        val meters = kotlin.math.hypot(cp.center.x - foot.x, cp.center.y - foot.y)
+        val text = m?.millimeters?.toString() ?: "~${Math.round(meters * 1000)}"
+        label(measurer, text, ColumnColor, f, c, outward = true, bg)
+    }
+    val name = columnTitle + (col.sizeText?.let { " $it" } ?: "")
+    val layout = measurer.measure(name, TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Bold, color = ColumnColor))
+    drawText(layout, topLeft = Offset(c.x - layout.size.width / 2f, c.y - layout.size.height / 2f))
 }
 
 private fun DrawScope.drawGrid(color: Color) {

@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import app.zamero.core.Column
 import app.zamero.core.EngElement
 import app.zamero.core.EngType
 import app.zamero.core.Measure
@@ -207,6 +208,20 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private fun editElement(id: String, block: EngElement.() -> EngElement) =
         editRoom { copy(engineering = engineering.map { if (it.id == id) it.block() else it }) }
+
+    // --- Колонны --------------------------------------------------------------
+
+    fun addColumn(column: Column) = editRoom { copy(columns = columns + column) }
+
+    fun setColumnRound(id: String, round: Boolean) = editRoom {
+        copy(columns = columns.map { if (it.id == id) it.copy(round = round, depth = if (round) null else it.depth) else it })
+    }
+
+    fun deleteColumn(id: String) {
+        val target = dialogTarget
+        if (target is MeasureTarget.ColumnValue && target.columnId == id) dialogTarget = null
+        editRoom { copy(columns = columns.filterNot { it.id == id }) }
+    }
 
     // --- Отмена --------------------------------------------------------------
 

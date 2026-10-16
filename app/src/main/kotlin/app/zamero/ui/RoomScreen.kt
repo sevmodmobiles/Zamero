@@ -44,6 +44,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import app.zamero.core.Category
+import app.zamero.core.Column as ColumnModel
+import app.zamero.core.ColumnDim
+import app.zamero.core.Columns
+import app.zamero.core.Measure
+import app.zamero.core.Source
 import app.zamero.core.EngElement
 import app.zamero.core.EngType
 import app.zamero.core.Geometry
@@ -58,6 +63,7 @@ import app.zamero.core.Room
 import app.zamero.core.Straighten
 import app.zamero.laser.LaserState
 import java.util.Locale
+import java.util.UUID
 import kotlin.math.atan2
 
 /** Окно параметров инженерии: новый элемент выбранного типа или правка существующего. */
@@ -77,6 +83,9 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
     var drawingExtra by remember(room.id) { mutableStateOf(false) }
     var extraRoute by remember(room.id) { mutableStateOf<List<Point>?>(null) }
     var extraType by remember(room.id) { mutableStateOf<EngType?>(null) }
+    // Колонна, распознанная в рисунке (координаты плана, м), и открытая колонна.
+    var newColumn by remember(room.id) { mutableStateOf<Columns.Detected?>(null) }
+    var openColumnId by remember(room.id) { mutableStateOf<String?>(null) }
     val laserState by vm.laser.state.collectAsState()
     val laserConnected = laserState is LaserState.Connected
     val target = vm.dialogTarget
@@ -108,7 +117,7 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                 when (mode) {
                     CanvasMode.DRAW_OUTLINE -> "Нарисуйте контур одной линией — она выпрямится сама"
                     CanvasMode.DRAW_ROUTE -> "Проведите трассу «${routing?.label}» поверх плана"
-                    CanvasMode.DRAW_EXTRA -> "Дорисуйте линию пальцем — концы сами притянутся к стенам"
+                    CanvasMode.DRAW_EXTRA -> "Дорисуйте линию (концы притянутся к стенам) или обведите колонну"
                     CanvasMode.VIEW -> summary(room)
                 },
                 style = MaterialTheme.typography.bodySmall,
@@ -130,6 +139,15 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                 },
                 onRoute = { planStroke ->
                     val plan = Plan.room(room) ?: return@PlanCanvas
+                    // Маленькая замкнутая фигура в режиме «Дорисовать» — это колонна.
+                    if (routing == null) {
+                        val col = Columns.detect(planStroke, Columns.baseAngle(plan))
+                        if (col != null && maxOf(col.width, col.depth) < planDiagonal(plan) * 0.35) {
+                            drawingExtra = false
+                            newColumn = col
+                            return@PlanCanvas
+                        }
+                    }
                     val line = straightenAndSnap(room, plan, planStroke, excludeId = routing?.id)
                     if (line == null) {
                         Toast.makeText(context, "Линия слишком короткая — проведите длиннее", Toast.LENGTH_SHORT).show()
@@ -144,6 +162,7 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                     }
                 },
                 onTap = vm::openDialog,
+                onColumnTap = { openColumnId = it },
                 modifier = Modifier.fillMaxWidth().weight(1f).padding(horizontal = 8.dp),
             )
             Row(
@@ -232,6 +251,48 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
             onDismiss = { engEdit = null },
         )
     }
+    newColumn?.let { det ->
+        NewColumnDialog(
+            detectedRound = det.round,
+            approxWidthM = det.width,
+            approxDepthM = det.depth,
+            onSave = { round, w, d ->
+                Plan.room(room)?.let { plan ->
+                    val (refU, refV) = Columns.referenceWalls(plan, det.center)
+                    vm.addColumn(
+                        ColumnModel(
+                            id = UUID.randomUUID().toString(),
+                            round = round,
+                            center = Plan.toSketch(room, plan, det.center),
+                            approxWidth = det.width,
+                            approxDepth = if (round) det.width else det.depth,
+                            width = w?.let { Measure(it, Source.MANUAL) },
+                            depth = d?.let { Measure(it, Source.MANUAL) },
+                            refWallU = refU,
+                            refWallV = refV,
+                        ),
+                    )
+                }
+                newColumn = null
+            },
+            onDismiss = { newColumn = null },
+        )
+    }
+    openColumnId?.let { id ->
+        val col = room.columns.firstOrNull { it.id == id }
+        if (col == null) {
+            openColumnId = null
+        } else {
+            ColumnInfoDialog(
+                room = room,
+                column = col,
+                onPick = { t -> openColumnId = null; vm.openDialog(t) },
+                onRoundChange = { vm.setColumnRound(id, it) },
+                onDelete = { openColumnId = null; vm.deleteColumn(id) },
+                onDismiss = { openColumnId = null },
+            )
+        }
+    }
     val pendingRoute = extraRoute
     if (pendingRoute != null && extraType == null) {
         AlertDialog(
@@ -284,6 +345,12 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
  * Выпрямляет нарисованную линию вдоль стен помещения и притягивает её концы
  * к стенам и уже нарисованным линиям. Всё в метрах плана.
  */
+private fun planDiagonal(plan: Plan.RoomPlan): Double {
+    val xs = plan.vertices.map { it.x }
+    val ys = plan.vertices.map { it.y }
+    return kotlin.math.hypot(xs.max() - xs.min(), ys.max() - ys.min())
+}
+
 private fun straightenAndSnap(room: Room, plan: Plan.RoomPlan, stroke: List<Point>, excludeId: String?): List<Point>? {
     val w0 = plan.walls.first()
     val base = atan2(w0.b.y - w0.a.y, w0.b.x - w0.a.x)
@@ -307,6 +374,7 @@ private fun summary(room: Room): String {
 private fun targetColor(room: Room, target: MeasureTarget): Color? = when (target) {
     is MeasureTarget.Wall -> wallColor(target.index, room.walls.size)
     is MeasureTarget.EngSegment -> room.engineering.firstOrNull { it.id == target.elementId }?.let { engColor(it.type) }
+    is MeasureTarget.ColumnValue -> ColumnColor
     else -> null
 }
 
@@ -329,6 +397,11 @@ private fun MeasureList(
                 t is MeasureTarget.OpeningWidth -> item(key = "opening-${t.index}") {
                     SectionHeader(MeasureFlow.openingTitle(room, t.index)) {
                         TextButton(onClick = { vm.removeOpening(t.index) }) { Text("Убрать") }
+                    }
+                }
+                t is MeasureTarget.ColumnValue && t.dim == ColumnDim.WIDTH -> item(key = "col-${t.columnId}") {
+                    SectionHeader(MeasureFlow.columnTitle(room, t.columnId), ColumnColor) {
+                        TextButton(onClick = { vm.deleteColumn(t.columnId) }) { Text("Удал.") }
                     }
                 }
                 t is MeasureTarget.EngSegment && t.index == 0 -> {
@@ -375,6 +448,7 @@ private fun MeasureRow(room: Room, target: MeasureTarget, color: Color?, selecte
     val bg = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent
     val label = when (target) {
         is MeasureTarget.EngSegment -> "Участок ${target.index + 1}"
+        is MeasureTarget.ColumnValue -> MeasureFlow.label(room, target).substringAfter(": ").replaceFirstChar { it.uppercase() }
         else -> MeasureFlow.label(room, target)
     }
     Row(

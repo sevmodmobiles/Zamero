@@ -8,6 +8,8 @@ sealed interface MeasureTarget {
     data class OpeningHeight(val index: Int) : MeasureTarget
     /** Участок [index] инженерной линии [elementId]. */
     data class EngSegment(val elementId: String, val index: Int) : MeasureTarget
+    /** Размер или привязка колонны. */
+    data class ColumnValue(val columnId: String, val dim: ColumnDim) : MeasureTarget
 }
 
 /**
@@ -25,6 +27,15 @@ object MeasureFlow {
             add(MeasureTarget.OpeningHeight(it))
         }
         room.engineering.forEach { e -> e.segments.indices.forEach { add(MeasureTarget.EngSegment(e.id, it)) } }
+        room.columns.forEach { c -> columnDims(c).forEach { add(MeasureTarget.ColumnValue(c.id, it)) } }
+    }
+
+    /** Что меряем у колонны: размеры и обе привязки (если опорная стена найдена). */
+    fun columnDims(c: Column): List<ColumnDim> = buildList {
+        add(ColumnDim.WIDTH)
+        if (!c.round) add(ColumnDim.DEPTH)
+        if (c.refWallU >= 0) add(ColumnDim.OFFSET_U)
+        if (c.refWallV >= 0) add(ColumnDim.OFFSET_V)
     }
 
     fun valueOf(room: Room, target: MeasureTarget): Measure? = when (target) {
@@ -33,6 +44,14 @@ object MeasureFlow {
         is MeasureTarget.OpeningWidth -> room.openings.getOrNull(target.index)?.width
         is MeasureTarget.OpeningHeight -> room.openings.getOrNull(target.index)?.height
         is MeasureTarget.EngSegment -> room.engineering.firstOrNull { it.id == target.elementId }?.segments?.getOrNull(target.index)
+        is MeasureTarget.ColumnValue -> room.columns.firstOrNull { it.id == target.columnId }?.let { c ->
+            when (target.dim) {
+                ColumnDim.WIDTH -> c.width
+                ColumnDim.DEPTH -> c.depth
+                ColumnDim.OFFSET_U -> c.offsetU
+                ColumnDim.OFFSET_V -> c.offsetV
+            }
+        }
     }
 
     fun set(room: Room, target: MeasureTarget, value: Measure?): Room = when (target) {
@@ -46,6 +65,20 @@ object MeasureFlow {
                     e.copy(segments = e.segments.toMutableList().also { it[target.index] = value })
                 } else {
                     e
+                }
+            },
+        )
+        is MeasureTarget.ColumnValue -> room.copy(
+            columns = room.columns.map { c ->
+                if (c.id != target.columnId) {
+                    c
+                } else {
+                    when (target.dim) {
+                        ColumnDim.WIDTH -> c.copy(width = value)
+                        ColumnDim.DEPTH -> c.copy(depth = value)
+                        ColumnDim.OFFSET_U -> c.copy(offsetU = value)
+                        ColumnDim.OFFSET_V -> c.copy(offsetV = value)
+                    }
                 }
             },
         )
@@ -72,6 +105,20 @@ object MeasureFlow {
         is MeasureTarget.OpeningWidth -> "${openingTitle(room, target.index)}: ширина"
         is MeasureTarget.OpeningHeight -> "${openingTitle(room, target.index)}: высота"
         is MeasureTarget.EngSegment -> "${engTitle(room, target.elementId)}, участок ${target.index + 1}"
+        is MeasureTarget.ColumnValue -> "${columnTitle(room, target.columnId)}: ${columnDimTitle(room, target)}"
+    }
+
+    fun columnTitle(room: Room, columnId: String): String =
+        "Колонна ${room.columns.indexOfFirst { it.id == columnId } + 1}"
+
+    private fun columnDimTitle(room: Room, target: MeasureTarget.ColumnValue): String {
+        val c = room.columns.first { it.id == target.columnId }
+        return when (target.dim) {
+            ColumnDim.WIDTH -> if (c.round) "диаметр" else "ширина"
+            ColumnDim.DEPTH -> "глубина"
+            ColumnDim.OFFSET_U -> "ось ↔ стена ${c.refWallU + 1}"
+            ColumnDim.OFFSET_V -> "ось ↕ стена ${c.refWallV + 1}"
+        }
     }
 
     /** «Труба 2» — номер среди элементов того же типа. */

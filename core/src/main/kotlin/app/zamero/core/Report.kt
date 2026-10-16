@@ -40,6 +40,15 @@ object Report {
                 if (e.segments.isNotEmpty()) appendLine("    участки: $segs$total")
                 if (e.note.isNotBlank()) appendLine("    ${e.note}")
             }
+            room.columns.forEach { c ->
+                val title = MeasureFlow.columnTitle(room, c.id)
+                appendLine("  • $title (${if (c.round) "круглая" else "прямоугольная"}): ${c.sizeText ?: "размер не измерен"}")
+                MeasureFlow.columnDims(c).filter { it == ColumnDim.OFFSET_U || it == ColumnDim.OFFSET_V }.forEach { d ->
+                    val label = MeasureFlow.label(room, MeasureTarget.ColumnValue(c.id, d)).substringAfter(": ")
+                    val v = MeasureFlow.valueOf(room, MeasureTarget.ColumnValue(c.id, d))
+                    appendLine("    $label: ${v.fmt()}")
+                }
+            }
             appendLine()
         }
         append("Итого площадь: ${m2(total)}")

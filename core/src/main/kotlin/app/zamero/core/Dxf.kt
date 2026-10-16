@@ -23,6 +23,8 @@ object Dxf {
         Layer("WALLS", 7),
         Layer("DIMENSIONS", 2),
         Layer("TEXT", 7),
+        Layer("COLUMNS", 1),
+        Layer("AXES", 8),
     )
 
     fun export(project: Project): ByteArray = build(project).toByteArray(CHARSET)
@@ -99,6 +101,35 @@ object Dxf {
                     val b = pts[1]
                     text((a.x + b.x) / 2, (a.y + b.y) / 2 + 60, SMALL_TEXT_MM, e.label, e.type.layer)
                 }
+                // Колонны: контур, оси и привязки к стенам.
+                room.columns.forEachIndexed { i, col ->
+                    val cp = Columns.plan(room, plan, col)
+                    val c = tx(cp.center)
+                    if (cp.round) {
+                        circle(c, cp.width * 500, "COLUMNS")
+                    } else {
+                        polyline(cp.corners.map(::tx), closed = true, layer = "COLUMNS")
+                    }
+                    val reach = maxOf(cp.width, cp.depth) / 2 + 0.4
+                    for (dir in listOf(cp.u, cp.v)) {
+                        val a = tx(Point(cp.center.x - dir.x * reach, cp.center.y - dir.y * reach))
+                        val b = tx(Point(cp.center.x + dir.x * reach, cp.center.y + dir.y * reach))
+                        polyline(listOf(a, b), closed = false, layer = "AXES")
+                    }
+                    val name = "К${i + 1}" + (col.sizeText?.let { " $it" } ?: "")
+                    text(c.x, c.y + (cp.depth * 500) + 120, SMALL_TEXT_MM, name, "COLUMNS")
+                    listOf(cp.footU to col.offsetU, cp.footV to col.offsetV).forEach { (foot, m) ->
+                        if (foot == null) return@forEach
+                        val f = tx(foot)
+                        polyline(listOf(f, c), closed = false, layer = "DIMENSIONS")
+                        val len = m?.millimeters?.toString()
+                            ?: "~${Math.round(kotlin.math.hypot(cp.center.x - foot.x, cp.center.y - foot.y) * 1000)}"
+                        var angle = Math.toDegrees(atan2(c.y - f.y, c.x - f.x))
+                        if (angle > 90) angle -= 180
+                        if (angle <= -90) angle += 180
+                        text((f.x + c.x) / 2, (f.y + c.y) / 2 + 60, SMALL_TEXT_MM, len, "DIMENSIONS", angle)
+                    }
+                }
                 offsetX += width + GAP_MM
             }
         }
@@ -132,6 +163,12 @@ object Dxf {
             pair(72, 1); pair(11, x); pair(21, y); pair(31, 0.0)
         }
 
+        fun circle(center: Point, radius: Double, layer: String) {
+            pair(0, "CIRCLE"); pair(8, layer)
+            pair(10, center.x); pair(20, center.y); pair(30, 0.0)
+            pair(40, radius)
+        }
+
         fun polyline(points: List<Point>, closed: Boolean, layer: String) {
             if (points.size < 2) return
             pair(0, "POLYLINE"); pair(8, layer); pair(66, 1)
@@ -154,5 +191,7 @@ object Dxf {
         .replace('≈', '~')
         .replace("²", "2")
         .replace("³", "3")
+        .replace('↔', '-')
+        .replace('↕', '|')
         .replace('\n', ' ')
 }

@@ -1,6 +1,7 @@
 package app.zamero.data
 
 import android.content.Context
+import app.zamero.core.Column
 import app.zamero.core.EngElement
 import app.zamero.core.EngType
 import app.zamero.core.Measure
@@ -61,6 +62,34 @@ class ProjectStore(context: Context) {
             ),
         )
         .put("engineering", JSONArray(engineering.map { it.toJson() }))
+        .put("columns", JSONArray(columns.map { it.toJson() }))
+
+    private fun Column.toJson() = JSONObject()
+        .put("id", id)
+        .put("round", round)
+        .put("center", JSONArray().put(center.x).put(center.y))
+        .put("approxW", approxWidth)
+        .put("approxD", approxDepth)
+        .put("width", width.toJson() ?: JSONObject.NULL)
+        .put("depth", depth.toJson() ?: JSONObject.NULL)
+        .put("offsetU", offsetU.toJson() ?: JSONObject.NULL)
+        .put("offsetV", offsetV.toJson() ?: JSONObject.NULL)
+        .put("refU", refWallU)
+        .put("refV", refWallV)
+
+    private fun JSONObject.toColumn() = Column(
+        id = getString("id"),
+        round = getBoolean("round"),
+        center = getJSONArray("center").let { Point(it.getDouble(0), it.getDouble(1)) },
+        approxWidth = getDouble("approxW"),
+        approxDepth = getDouble("approxD"),
+        width = optJSONObject("width").toMeasure(),
+        depth = optJSONObject("depth").toMeasure(),
+        offsetU = optJSONObject("offsetU").toMeasure(),
+        offsetV = optJSONObject("offsetV").toMeasure(),
+        refWallU = optInt("refU", -1),
+        refWallV = optInt("refV", -1),
+    )
 
     private fun EngElement.toJson() = JSONObject()
         .put("id", id)
@@ -123,6 +152,7 @@ class ProjectStore(context: Context) {
                 )
             },
             engineering = optJSONArray("engineering")?.objects()?.map { it.toEng() } ?: emptyList(),
+            columns = optJSONArray("columns")?.objects()?.map { it.toColumn() } ?: emptyList(),
         )
     }
 
