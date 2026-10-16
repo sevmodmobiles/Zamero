@@ -28,18 +28,42 @@ jobs:
       - name: Unit tests (core)
         run: ./gradlew :core:test --no-daemon
 
-      - name: Signing key from secrets
+      # Ключ подписи. Нужен один секрет ZAMERO_KEY_PASSWORD (любой пароль от 12 символов).
+      # При первой сборке ключ создаётся сам, шифруется этим паролем и сохраняется
+      # в репозитории как app/signing.keystore.enc. Без пароля файл бесполезен.
+      - name: Signing key
         env:
-          KEYSTORE_BASE64: ${{ secrets.ZAMERO_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.ZAMERO_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ZAMERO_KEY_PASSWORD }}
         run: |
-          if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/zamero.keystore"
-            echo "ZAMERO_KEYSTORE_FILE=$RUNNER_TEMP/zamero.keystore" >> "$GITHUB_ENV"
-            echo "ZAMERO_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
-          else
-            echo "::warning::Секреты подписи не заданы — APK подписан временным ключом, самообновление поверх не установится"
+          if [ -z "$KEY_PASSWORD" ]; then
+            echo "::warning::Секрет ZAMERO_KEY_PASSWORD не задан — APK подписан временным ключом, самообновление поверх не установится"
+            exit 0
           fi
+          ENC=app/signing.keystore.enc
+          KS="$RUNNER_TEMP/zamero.keystore"
+          BRANCH="${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}"
+          # Ключ мог появиться в ветке после коммита этой сборки.
+          git fetch -q origin "$BRANCH" || true
+          if [ ! -f "$ENC" ] && git cat-file -e "origin/$BRANCH:$ENC" 2>/dev/null; then
+            git show "origin/$BRANCH:$ENC" > "$ENC"
+          fi
+          if [ -f "$ENC" ]; then
+            openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -in "$ENC" -out "$KS" -pass env:KEY_PASSWORD
+          elif [ "$GITHUB_EVENT_NAME" != "pull_request" ]; then
+            keytool -genkeypair -keystore "$KS" -storetype PKCS12 -alias zamero -keyalg RSA -keysize 2048 \
+              -validity 10000 -storepass "$KEY_PASSWORD" -keypass "$KEY_PASSWORD" -dname "CN=Zamero"
+            openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt -in "$KS" -out "$ENC" -pass env:KEY_PASSWORD
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add "$ENC"
+            git commit -m "Ключ подписи (зашифрован)"
+            git pull -q --rebase origin "$BRANCH"
+            git push origin HEAD:"$BRANCH"
+          else
+            exit 0
+          fi
+          echo "ZAMERO_KEYSTORE_FILE=$KS" >> "$GITHUB_ENV"
+          echo "ZAMERO_KEYSTORE_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
 
       - name: Build release APK
         run: |

@@ -18,8 +18,8 @@ android {
         versionName = "0.$build"
     }
 
-    // Ключ подписи приходит из секретов GitHub (ZAMERO_KEYSTORE_BASE64, ZAMERO_KEYSTORE_PASSWORD).
-    // Пока секретов нет, релиз подписывается отладочным ключом сборщика.
+    // Ключ подписи расшифровывает сборка на GitHub (см. шаг «Signing key» в ci.yml).
+    // Без него релиз подписывается отладочным ключом сборщика.
     val keystorePath = System.getenv("ZAMERO_KEYSTORE_FILE")
     signingConfigs {
         if (keystorePath != null) {
