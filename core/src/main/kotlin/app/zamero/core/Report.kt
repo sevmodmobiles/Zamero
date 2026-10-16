@@ -39,6 +39,11 @@ object Report {
                 val system = e.system?.let { "[${it.title}] " } ?: ""
                 appendLine("  • $system${MeasureFlow.engTitle(room, e.id)}${if (details.isNotEmpty()) ": $details" else ""}")
                 if (e.segments.isNotEmpty()) appendLine("    участки: $segs$total")
+                if (e.hasHeightChanges) {
+                    val heights = e.segments.indices.joinToString(" → ") { e.elevationOf(it)?.toString() ?: "?" }
+                    appendLine("    высоты участков от пола: $heights мм; перепады ${mm(e.risersLength)}")
+                    e.fullLength?.let { appendLine("    длина с перепадами: ${mm(it)}") }
+                }
                 if (e.note.isNotBlank()) appendLine("    ${e.note}")
             }
             room.columns.forEach { c ->

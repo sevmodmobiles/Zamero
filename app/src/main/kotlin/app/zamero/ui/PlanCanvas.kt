@@ -397,8 +397,28 @@ fun PlanCanvas(
                 }
                 if (active) for (i in 0 until pts.size - 1) {
                     val len = e.segments.getOrNull(i)?.millimeters
-                    val text = if (i == 0) "${e.sectionText.ifEmpty { e.type.title }}${len?.let { " · $it" } ?: ""}" else len?.toString() ?: continue
-                    label(measurer, text, color, pts[i], pts[i + 1], outward = false, labelBg)
+                    val own = e.segmentElevationsMm.getOrNull(i)?.let { "h=$it" }
+                    val parts = listOfNotNull(
+                        if (i == 0) e.sectionText.ifEmpty { e.type.title } else null,
+                        len?.toString(),
+                        own,
+                    )
+                    if (parts.isEmpty()) continue
+                    label(measurer, parts.joinToString(" · "), color, pts[i], pts[i + 1], outward = false, labelBg)
+                }
+                // Перепад высот в узле: кружок и величина.
+                if (active) for (i in 0 until pts.size - 2) {
+                    val h1 = e.elevationOf(i)
+                    val h2 = e.elevationOf(i + 1)
+                    if (h1 == null || h2 == null || h1 == h2) continue
+                    val j = pts[i + 1]
+                    drawCircle(labelBg, 9.dp.toPx(), j)
+                    drawCircle(color, 9.dp.toPx(), j, style = Stroke(2.dp.toPx()))
+                    val drop = measurer.measure(
+                        "↕${kotlin.math.abs(h2 - h1)}",
+                        TextStyle(fontSize = 11.sp, fontWeight = FontWeight.Bold, color = color),
+                    )
+                    drawText(drop, topLeft = Offset(j.x + 11.dp.toPx(), j.y - drop.size.height - 2.dp.toPx()))
                 }
             }
             columns.forEach { (col, cp) ->

@@ -103,6 +103,7 @@ class ProjectStore(context: Context) {
         .put("elevation", elevationMm ?: JSONObject.NULL)
         .put("note", note)
         .put("system", system?.name ?: JSONObject.NULL)
+        .put("segElev", JSONArray(segmentElevationsMm.map { it ?: JSONObject.NULL }))
 
     private fun JSONObject.toEng(): EngElement {
         val type = EngType.valueOf(getString("type"))
@@ -119,6 +120,11 @@ class ProjectStore(context: Context) {
             elevationMm = optIntOrNull("elevation"),
             note = optString("note"),
             system = if (isNull("system") || !has("system")) Discipline.defaultFor(type) else Discipline.valueOf(getString("system")),
+            segmentElevationsMm = optJSONArray("segElev").let { arr ->
+                List((route.size - 1).coerceAtLeast(0)) { i ->
+                    if (arr == null || i >= arr.length() || arr.isNull(i)) null else arr.getInt(i)
+                }
+            },
         )
     }
 

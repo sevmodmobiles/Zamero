@@ -176,7 +176,17 @@ object Edit {
                     e.route.lastIndex -> e.segments.dropLast(1)
                     else -> e.segments.filterIndexed { j, _ -> j != i }.mapIndexed { j, m -> if (j == i - 1) null else m }
                 }
-                val updated = e.copy(route = e.route.filterIndexed { j, _ -> j != i }, segments = segments)
+                // Высоты: у слитого участка остаётся высота левого.
+                val elevations = when (i) {
+                    0 -> e.segmentElevationsMm.drop(1)
+                    e.route.lastIndex -> e.segmentElevationsMm.dropLast(1)
+                    else -> e.segmentElevationsMm.filterIndexed { j, _ -> j != i }
+                }
+                val updated = e.copy(
+                    route = e.route.filterIndexed { j, _ -> j != i },
+                    segments = segments,
+                    segmentElevationsMm = elevations,
+                )
                 room.copy(engineering = room.engineering.map { if (it.id == e.id) updated else it })
             }
         }
@@ -190,11 +200,20 @@ object Edit {
         val e = room.engineering.firstOrNull { it.id == elementId } ?: return room
         if (index !in e.segments.indices) return room
         val parts = listOf(
-            e.route.subList(0, index + 1) to e.segments.subList(0, index),
-            e.route.subList(index + 1, e.route.size) to e.segments.subList(index + 1, e.segments.size),
-        ).filter { (route, _) -> route.size >= 2 }
-        val replaced = parts.mapIndexed { i, (route, segments) ->
-            e.copy(id = if (i == 0) e.id else newId, route = route.toList(), segments = segments.toList())
+            Triple(e.route.subList(0, index + 1), e.segments.subList(0, index), e.segmentElevationsMm.subList(0, index)),
+            Triple(
+                e.route.subList(index + 1, e.route.size),
+                e.segments.subList(index + 1, e.segments.size),
+                e.segmentElevationsMm.subList(index + 1, e.segments.size),
+            ),
+        ).filter { (route, _, _) -> route.size >= 2 }
+        val replaced = parts.mapIndexed { i, (route, segments, elevations) ->
+            e.copy(
+                id = if (i == 0) e.id else newId,
+                route = route.toList(),
+                segments = segments.toList(),
+                segmentElevationsMm = elevations.toList(),
+            )
         }
         val at = room.engineering.indexOf(e)
         val list = room.engineering.toMutableList().apply {
@@ -203,6 +222,17 @@ object Edit {
         }
         return room.copy(engineering = list)
     }
+
+    /** Своя высота участка (мм) или null — как у всей трассы. */
+    fun setSegmentElevation(room: Room, elementId: String, index: Int, mm: Int?): Room = room.copy(
+        engineering = room.engineering.map { e ->
+            if (e.id != elementId || index !in e.segmentElevationsMm.indices) {
+                e
+            } else {
+                e.copy(segmentElevationsMm = e.segmentElevationsMm.toMutableList().also { it[index] = mm })
+            }
+        },
+    )
 
     private fun dist(a: Point, b: Point) = hypot(b.x - a.x, b.y - a.y)
 }

@@ -85,6 +85,7 @@ private fun LineMenu(
     onDismiss: () -> Unit,
     onLength: () -> Unit,
     onProperties: (EngElement) -> Unit,
+    onHeight: (MeasureTarget.EngSegment) -> Unit,
     onDelete: () -> Unit,
 ) {
     val value = MeasureFlow.valueOf(room, target)
@@ -100,6 +101,15 @@ private fun LineMenu(
             text = { Text("Длина: " + (value?.let { fmtMm(it.meters) } ?: "ввести") + "  ✎") },
             onClick = onLength,
         )
+        if (element != null && element.type.category == Category.ENGINEERING && target is MeasureTarget.EngSegment) {
+            val own = element.segmentElevationsMm.getOrNull(target.index)
+            val text = when {
+                own != null -> "Высота: $own мм (перепад)"
+                element.elevationMm != null -> "Высота: ${element.elevationMm} мм (как у трассы)"
+                else -> "Высота: задать"
+            }
+            DropdownMenuItem(text = { Text("$text  ✎") }, onClick = { onHeight(target) })
+        }
         if (element != null && element.type != EngType.LINE) {
             DropdownMenuItem(text = { Text("Свойства…") }, onClick = { onProperties(element) })
         }
@@ -136,6 +146,8 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
     var moreMenu by remember { mutableStateOf(false) }
     // Меню у пальца после нажатия на линию: длина, свойства, удалить.
     var lineMenu by remember(room.id) { mutableStateOf<Pair<MeasureTarget, Offset>?>(null) }
+    // Окно своей высоты участка трассы.
+    var heightTarget by remember(room.id) { mutableStateOf<MeasureTarget.EngSegment?>(null) }
     // «Дорисовать»: рисуем линию, потом выбираем, что это, потом параметры.
     var drawingExtra by remember(room.id) { mutableStateOf(false) }
     var extraRoute by remember(room.id) { mutableStateOf<List<Point>?>(null) }
@@ -293,6 +305,7 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                             onDismiss = { lineMenu = null },
                             onLength = { lineMenu = null; vm.openDialog(t) },
                             onProperties = { e -> lineMenu = null; engEdit = EngEdit(e.type, e) },
+                            onHeight = { seg -> lineMenu = null; heightTarget = seg },
                             onDelete = {
                                 lineMenu = null
                                 if (t is MeasureTarget.EngSegment) vm.deleteSegment(t.elementId, t.index)
@@ -388,6 +401,31 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                 onSave = { meters, source, goNext -> vm.saveMeasure(target, meters, source, goNext) },
                 onDismiss = vm::closeDialog,
             )
+        }
+    }
+    heightTarget?.let { seg ->
+        val element = room.engineering.firstOrNull { it.id == seg.elementId }
+        if (element == null) {
+            heightTarget = null
+        } else {
+            val own = element.segmentElevationsMm.getOrNull(seg.index)
+            key(seg) {
+                MeasureDialog(
+                    title = "${MeasureFlow.label(room, seg)}: высота от пола",
+                    color = engColor(element),
+                    current = own?.let { Measure(it / 1000.0, Source.MANUAL) },
+                    laserConnected = laserConnected,
+                    lastLaser = vm.lastLaser,
+                    hasNext = false,
+                    onSave = { meters, _, _ ->
+                        vm.setSegmentElevation(seg.elementId, seg.index, meters?.let { Math.round(it * 1000).toInt() })
+                        heightTarget = null
+                    },
+                    onDismiss = { heightTarget = null },
+                    clearLabel = "Как у всей трассы",
+                    hint = element.elevationMm?.let { "Вся трасса: $it мм. Своя высота — перепад." } ?: "Высота всей трассы не задана",
+                )
+            }
         }
     }
     engEdit?.let { edit ->
@@ -695,7 +733,9 @@ private fun StatsCard(room: Room, engineering: Boolean) {
             Text("Итоги", style = MaterialTheme.typography.titleMedium)
             if (engineering) {
                 room.engineering.filter { it.type.category == Category.ENGINEERING }.forEach { e ->
-                    Text("${MeasureFlow.engTitle(room, e.id)}: ${e.totalLength?.let(::fmtMm) ?: "не все участки измерены"}")
+                    val total = e.totalLength?.let(::fmtMm) ?: "не все участки измерены"
+                    val withRisers = e.fullLength?.takeIf { e.hasHeightChanges }?.let { " (с перепадами ${fmtMm(it)})" } ?: ""
+                    Text("${MeasureFlow.engTitle(room, e.id)}: $total$withRisers")
                 }
                 return@Column
             }

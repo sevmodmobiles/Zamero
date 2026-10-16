@@ -111,6 +111,23 @@ object Dxf {
                     val b = pts[1]
                     val caption = (e.system?.let { "${it.title}: " } ?: "") + e.label
                     text((a.x + b.x) / 2, (a.y + b.y) / 2 + 60, SMALL_TEXT_MM, caption, e.dxfLayer)
+                    // Перепады: своя высота участка и величина перепада в узле.
+                    if (e.hasHeightChanges) {
+                        for (i in e.segments.indices) {
+                            if (e.segmentElevationsMm[i] == null) continue
+                            val p = pts[i]
+                            val q = pts[i + 1]
+                            text((p.x + q.x) / 2, (p.y + q.y) / 2 - 160, SMALL_TEXT_MM, "h=${e.elevationOf(i)}", e.dxfLayer)
+                        }
+                        for (i in 0 until e.segments.size - 1) {
+                            val h1 = e.elevationOf(i)
+                            val h2 = e.elevationOf(i + 1)
+                            if (h1 == null || h2 == null || h1 == h2) continue
+                            val j = pts[i + 1]
+                            circle(j, 60.0, e.dxfLayer)
+                            text(j.x + 120, j.y + 120, SMALL_TEXT_MM, "перепад ${h2 - h1}", e.dxfLayer)
+                        }
+                    }
                 }
                 // Колонны: контур, оси и привязки к стенам.
                 room.columns.forEachIndexed { i, col ->

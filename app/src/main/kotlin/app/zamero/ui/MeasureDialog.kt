@@ -46,6 +46,10 @@ fun MeasureDialog(
     hasNext: Boolean,
     onSave: (meters: Double?, source: Source, goNext: Boolean) -> Unit,
     onDismiss: () -> Unit,
+    /** Подпись кнопки сброса значения. */
+    clearLabel: String = "Стереть",
+    /** Подсказка под полем. */
+    hint: String? = null,
 ) {
     val openedSeq = remember { lastLaser?.seq ?: 0 }
     var text by remember { mutableStateOf(current?.millimeters?.toString() ?: "") }
@@ -82,7 +86,12 @@ fun MeasureDialog(
                         text = v.filter { it.isDigit() }.take(6)
                         source = Source.MANUAL
                     },
-                    label = { Text("Длина") },
+                    label = { Text(if (hint == null) "Длина" else "Высота") },
+                    supportingText = if (hint != null) {
+                        { Text(hint) }
+                    } else {
+                        null
+                    },
                     suffix = { Text("мм") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -112,7 +121,7 @@ fun MeasureDialog(
                     TextButton(onClick = { camera.launch(Unit) }) { Text("Камерой ≈") }
                     if (current != null) {
                         TextButton(onClick = { onSave(null, Source.MANUAL, false) }) {
-                            Text("Стереть", color = MaterialTheme.colorScheme.error)
+                            Text(clearLabel, color = MaterialTheme.colorScheme.error)
                         }
                     }
                 }

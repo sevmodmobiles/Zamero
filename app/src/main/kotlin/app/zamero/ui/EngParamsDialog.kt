@@ -123,7 +123,8 @@ fun EngParamsDialog(
                 if (type.category == Category.ENGINEERING) {
                     OutlinedTextField(
                         elevation, { elevation = digits(it) },
-                        label = { Text("Отметка от пола") }, suffix = { Text("мм") },
+                        label = { Text("Высота от пола (вся трасса)") }, suffix = { Text("мм") },
+                        supportingText = { Text("Перепад на участке — в меню участка") },
                         singleLine = true, keyboardOptions = numbers,
                     )
                 }

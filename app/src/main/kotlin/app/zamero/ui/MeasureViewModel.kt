@@ -275,6 +275,10 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         editRoom { Edit.deleteSegment(this, elementId, index, UUID.randomUUID().toString()) }
     }
 
+    /** Своя высота участка от пола (мм); null — как у всей трассы. */
+    fun setSegmentElevation(elementId: String, index: Int, mm: Int?) =
+        editRoom { Edit.setSegmentElevation(this, elementId, index, mm) }
+
     // --- Слои инженерии ------------------------------------------------------
 
     /** Скрытые слои (системы) на этапе «Инженерия». */

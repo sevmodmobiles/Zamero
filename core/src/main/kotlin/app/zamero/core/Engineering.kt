@@ -67,21 +67,42 @@ data class EngElement(
     /** Ширина × высота для прямоугольных, мм; для стен и перегородок widthMm — толщина. */
     val widthMm: Int? = null,
     val heightMm: Int? = null,
-    /** Отметка (высота оси или низа) от чистого пола, мм. */
+    /** Высота от чистого пола для всей трассы, мм. */
     val elevationMm: Int? = null,
     val note: String = "",
     /** Система (слой) инженерной линии; у стен и линий — null. */
     val system: Discipline? = Discipline.defaultFor(type),
+    /** Своя высота участка от пола, мм (перепад); null — как у всей трассы. */
+    val segmentElevationsMm: List<Int?> = List(segments.size) { null },
 ) {
     init {
         require(segments.size == (route.size - 1).coerceAtLeast(0)) { "segments must match route" }
+        require(segmentElevationsMm.size == segments.size) { "segment elevations must match segments" }
     }
+
+    /** Высота участка [i] от пола, мм: своя или общая. */
+    fun elevationOf(i: Int): Int? = segmentElevationsMm.getOrNull(i) ?: elevationMm
+
+    /** Перепады высот между соседними участками, м (вертикальные участки трассы). */
+    val risersLength: Double
+        get() = (0 until segments.size - 1).sumOf { i ->
+            val a = elevationOf(i)
+            val b = elevationOf(i + 1)
+            if (a != null && b != null) kotlin.math.abs(b - a) / 1000.0 else 0.0
+        }
+
+    val hasHeightChanges: Boolean get() = risersLength > 0
 
     val hasRoute: Boolean get() = route.size >= 2
 
     fun withRoute(points: List<Point>): EngElement {
         val count = (points.size - 1).coerceAtLeast(0)
-        return copy(route = points, segments = if (count == segments.size) segments else List(count) { null })
+        val same = count == segments.size
+        return copy(
+            route = points,
+            segments = if (same) segments else List(count) { null },
+            segmentElevationsMm = if (same) segmentElevationsMm else List(count) { null },
+        )
     }
 
     /** «Ø110», «200×60» или пусто, если размеры не заданы. */
@@ -98,10 +119,14 @@ data class EngElement(
             append(type.title)
             if (sectionText.isNotEmpty()) append(' ').append(sectionText)
             elevationMm?.let { append(", h=").append(it) }
+            if (hasHeightChanges) append(" (с перепадами)")
         }
 
     /** Слой DXF: система + тип, например «OVIK_DUCT_RECT». */
     val dxfLayer: String get() = system?.let { "${it.code}_${type.layer}" } ?: type.layer
 
     val totalLength: Double? get() = if (segments.all { it != null }) segments.sumOf { it!!.meters } else null
+
+    /** Полная длина с вертикальными участками на перепадах, м. */
+    val fullLength: Double? get() = totalLength?.plus(risersLength)
 }
