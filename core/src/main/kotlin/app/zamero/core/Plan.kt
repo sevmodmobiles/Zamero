@@ -27,6 +27,11 @@ object Plan {
     }
 
     /** Метров в одной единице эскиза. */
+    fun scale(room: Room): Double {
+        val n = room.outline.size
+        return scaleOf(room, List(n) { i -> dist(room.outline[i], room.outline[(i + 1) % n]) })
+    }
+
     private fun scaleOf(room: Room, sketchLen: List<Double>): Double {
         val ratios = room.walls.indices.mapNotNull { i ->
             val m = room.walls[i]?.meters ?: return@mapNotNull null
@@ -39,25 +44,34 @@ object Plan {
         return DEFAULT_SIZE_M / longest
     }
 
-    /** Переводит точку эскиза в метры плана (по габаритам эскиза и плана). */
-    fun toPlan(room: Room, plan: RoomPlan, p: Point): Point = Box(room.outline).mapTo(Box(plan.vertices), p)
+    /**
+     * Переводит точку эскиза в метры плана. Опора — первая вершина контура,
+     * масштаб по осям — отношение габаритов плана и эскиза. Так при правке
+     * отдельной вершины остальные точки остаются на месте.
+     */
+    fun toPlan(room: Room, plan: RoomPlan, p: Point): Point {
+        val (kx, ky) = axisScale(room.outline, plan.vertices)
+        val o = room.outline.first()
+        val v = plan.vertices.first()
+        return Point(v.x + (p.x - o.x) * kx, v.y + (p.y - o.y) * ky)
+    }
 
     /** Обратное преобразование: точка плана (м) → координаты эскиза. */
-    fun toSketch(room: Room, plan: RoomPlan, p: Point): Point = Box(plan.vertices).mapTo(Box(room.outline), p)
+    fun toSketch(room: Room, plan: RoomPlan, p: Point): Point {
+        val (kx, ky) = axisScale(room.outline, plan.vertices)
+        val o = room.outline.first()
+        val v = plan.vertices.first()
+        return Point(o.x + (p.x - v.x) / kx, o.y + (p.y - v.y) / ky)
+    }
 
-    private class Box(points: List<Point>) {
-        val minX = points.minOf { it.x }
-        val maxX = points.maxOf { it.x }
-        val minY = points.minOf { it.y }
-        val maxY = points.maxOf { it.y }
-
-        fun mapTo(other: Box, p: Point) = Point(
-            map(p.x, minX, maxX, other.minX, other.maxX),
-            map(p.y, minY, maxY, other.minY, other.maxY),
-        )
-
-        private fun map(v: Double, sMin: Double, sMax: Double, pMin: Double, pMax: Double): Double =
-            if (sMax - sMin < 1e-9) pMin else pMin + (v - sMin) / (sMax - sMin) * (pMax - pMin)
+    private fun axisScale(sketch: List<Point>, plan: List<Point>): Pair<Double, Double> {
+        val sw = sketch.maxOf { it.x } - sketch.minOf { it.x }
+        val sh = sketch.maxOf { it.y } - sketch.minOf { it.y }
+        val pw = plan.maxOf { it.x } - plan.minOf { it.x }
+        val ph = plan.maxOf { it.y } - plan.minOf { it.y }
+        val kx = if (sw > 1e-9) pw / sw else 1.0
+        val ky = if (sh > 1e-9) ph / sh else kx
+        return kx to ky
     }
 
     /**

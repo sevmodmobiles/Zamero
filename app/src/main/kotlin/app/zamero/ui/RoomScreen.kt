@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -20,8 +21,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Surface
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -38,6 +41,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -46,6 +50,7 @@ import app.zamero.core.Category
 import app.zamero.core.Column as ColumnModel
 import app.zamero.core.ColumnDim
 import app.zamero.core.Columns
+import app.zamero.core.Edit
 import app.zamero.core.Measure
 import app.zamero.core.Source
 import app.zamero.core.EngElement
@@ -57,6 +62,7 @@ import app.zamero.core.OpeningType
 import app.zamero.core.Outlines
 import app.zamero.core.Plan
 import app.zamero.core.Point
+import app.zamero.core.PointRef
 import app.zamero.core.Snap
 import app.zamero.core.Room
 import app.zamero.core.Straighten
@@ -77,6 +83,10 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
     var engEdit by remember { mutableStateOf<EngEdit?>(null) }
     var redrawing by remember(room.id) { mutableStateOf(false) }
     var specOpen by remember { mutableStateOf(false) }
+    var tool by remember(room.id) { mutableStateOf(Tool.SELECT) }
+    var measureA by remember(room.id) { mutableStateOf<Point?>(null) }
+    var measureB by remember(room.id) { mutableStateOf<Point?>(null) }
+    var moreMenu by remember { mutableStateOf(false) }
     // «Дорисовать»: рисуем линию, потом выбираем, что это, потом параметры.
     var drawingExtra by remember(room.id) { mutableStateOf(false) }
     var extraRoute by remember(room.id) { mutableStateOf<List<Point>?>(null) }
@@ -109,7 +119,6 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                     )
                 },
                 actions = {
-                    if (vm.canUndo) TextButton(onClick = vm::undo) { Text("↶") }
                     TextButton(onClick = { laserDialog = true }) {
                         Text(if (laserConnected) "Дальномер ✓" else "Дальномер")
                     }
@@ -123,7 +132,11 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                     CanvasMode.DRAW_OUTLINE -> "Нарисуйте контур одной линией — она выпрямится сама"
                     CanvasMode.DRAW_ROUTE -> "Проведите трассу «${routing?.label}» поверх плана"
                     CanvasMode.DRAW_EXTRA -> if (eng) "Проведите трассу пальцем — она выровняется вдоль стен" else "Дорисуйте стену или перегородку; обведите колонну"
-                    CanvasMode.VIEW -> summary(room, eng)
+                    CanvasMode.VIEW -> when (tool) {
+                        Tool.SELECT -> summary(room, eng) + " · точки можно тянуть"
+                        Tool.ERASE -> "Стереть: нажмите на точку, линию или колонну"
+                        Tool.MEASURE -> if (measureB == null) "Размер: нажмите две точки на плане" else "Размер: нажмите новую точку, чтобы перемерить"
+                    }
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -169,9 +182,77 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                 onTap = vm::openDialog,
                 onColumnTap = { openColumnId = it },
                 engineeringStage = eng,
+                tool = tool,
+                onPointMove = vm::movePoint,
+                onErase = { hit ->
+                    when (hit) {
+                        is EraseHit.PointHit -> {
+                            if (hit.ref is PointRef.Vertex && room.outline.size <= 3) {
+                                Toast.makeText(context, "У контура должно остаться хотя бы 3 точки", Toast.LENGTH_SHORT).show()
+                            } else {
+                                vm.deletePoint(hit.ref)
+                            }
+                        }
+                        is EraseHit.ColumnHit -> vm.deleteColumn(hit.id)
+                        is EraseHit.Segment -> when (val t = hit.target) {
+                            is MeasureTarget.EngSegment -> vm.deleteEngineering(t.elementId)
+                            else -> Toast.makeText(
+                                context,
+                                "Стену контура стереть нельзя — сотрите её точку или перерисуйте контур",
+                                Toast.LENGTH_LONG,
+                            ).show()
+                        }
+                    }
+                },
+                measureA = measureA,
+                measureB = measureB,
+                onMeasureTap = { p ->
+                    if (measureA == null || measureB != null) {
+                        measureA = p
+                        measureB = null
+                    } else {
+                        measureB = p
+                    }
+                },
                 modifier = Modifier.fillMaxWidth().weight(1f).padding(horizontal = 8.dp),
             )
-            Row(
+            if (mode == CanvasMode.VIEW) {
+                EditorToolbar {
+                    ToolButton("↶", "Назад", enabled = vm.canUndo, onClick = vm::undo)
+                    ToolButton("↷", "Вперёд", enabled = vm.canRedo, onClick = vm::redo)
+                    ToolButton("✎", if (eng) "Трасса" else "Дорисовать") {
+                        tool = Tool.SELECT
+                        drawingExtra = true
+                    }
+                    ToolButton("⌫", "Стереть", selected = tool == Tool.ERASE) {
+                        tool = if (tool == Tool.ERASE) Tool.SELECT else Tool.ERASE
+                    }
+                    ToolButton("↔", "Размер", selected = tool == Tool.MEASURE) {
+                        tool = if (tool == Tool.MEASURE) Tool.SELECT else Tool.MEASURE
+                        measureA = null
+                        measureB = null
+                    }
+                    ToolButton("☰", "Список") { specOpen = true }
+                    Box {
+                        ToolButton("⋯", "Ещё") { moreMenu = true }
+                        DropdownMenu(expanded = moreMenu, onDismissRequest = { moreMenu = false }) {
+                            MeasureFlow.nextEmpty(room, engineering = eng)?.let { next ->
+                                DropdownMenuItem(text = { Text("Мерить по порядку") }, onClick = {
+                                    moreMenu = false
+                                    vm.openDialog(next)
+                                })
+                            }
+                            if (!eng) {
+                                DropdownMenuItem(text = { Text("Перерисовать контур") }, onClick = {
+                                    moreMenu = false
+                                    redrawing = true
+                                })
+                            }
+                        }
+                    }
+                }
+            }
+            if (mode != CanvasMode.VIEW) Row(
                 Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -184,14 +265,7 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                     }
                     CanvasMode.DRAW_ROUTE -> TextButton(onClick = vm::cancelRouting) { Text("Отмена") }
                     CanvasMode.DRAW_EXTRA -> TextButton(onClick = { drawingExtra = false }) { Text("Отмена") }
-                    CanvasMode.VIEW -> {
-                        FilledTonalButton(onClick = { drawingExtra = true }) { Text(if (eng) "Проложить трассу" else "Дорисовать") }
-                        OutlinedButton(onClick = { specOpen = true }) { Text("Спецификация ▴") }
-                        MeasureFlow.nextEmpty(room, engineering = eng)?.let { next ->
-                            OutlinedButton(onClick = { vm.openDialog(next) }) { Text("Мерить по порядку") }
-                        }
-                        if (!eng) OutlinedButton(onClick = { redrawing = true }) { Text("Перерисовать") }
-                    }
+                    CanvasMode.VIEW -> Unit
                 }
             }
         }
@@ -355,7 +429,45 @@ private fun straightenAndSnap(room: Room, plan: Plan.RoomPlan, stroke: List<Poin
     val xs = plan.vertices.map { it.x }
     val ys = plan.vertices.map { it.y }
     val diag = kotlin.math.hypot(xs.max() - xs.min(), ys.max() - ys.min())
-    return Snap.extendToWalls(line, targets, tolerance = diag * 0.06)
+    val snapped = Snap.extendToWalls(line, targets, tolerance = diag * 0.06)
+    // Концы, оказавшиеся рядом с готовой точкой, цепляются точно к ней.
+    val points = Edit.points(room) { it.id != excludeId }.map { it.second }
+    return Snap.endsToPoints(snapped, points, tolerance = diag * 0.04)
+}
+
+@Composable
+private fun EditorToolbar(content: @Composable RowScope.() -> Unit) {
+    Surface(tonalElevation = 3.dp) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically,
+            content = content,
+        )
+    }
+}
+
+/** Кнопка панели редактора: значок и подпись; выбранный инструмент подсвечен. */
+@Composable
+private fun ToolButton(
+    symbol: String,
+    label: String,
+    enabled: Boolean = true,
+    selected: Boolean = false,
+    onClick: () -> Unit,
+) {
+    val bg = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent
+    Column(
+        Modifier
+            .background(bg, RoundedCornerShape(10.dp))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 6.dp, vertical = 4.dp)
+            .alpha(if (enabled) 1f else 0.35f),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(symbol, style = MaterialTheme.typography.titleLarge)
+        Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+    }
 }
 
 /** Короткая сводка под заголовком: площадь и сколько осталось измерить на этом этапе. */

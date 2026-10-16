@@ -4,7 +4,9 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitTouchSlopOrCancellation
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -46,11 +48,13 @@ import app.zamero.core.Category
 import app.zamero.core.Column
 import app.zamero.core.ColumnPlan
 import app.zamero.core.Columns
+import app.zamero.core.Edit
 import app.zamero.core.EngElement
 import app.zamero.core.EngType
 import app.zamero.core.MeasureTarget
 import app.zamero.core.Plan
 import app.zamero.core.Point
+import app.zamero.core.PointRef
 import app.zamero.core.Room
 import kotlin.math.abs
 import kotlin.math.hypot
@@ -96,16 +100,31 @@ private class View(points: List<Point>, size: IntSize, pad: Float, private val z
         return (base - center) * zoom + center + pan
     }
 
+    fun metersPerPx(): Double = if (scale > 0f) 1.0 / (scale * zoom) else 0.0
+
     fun toPlan(s: Offset): Point {
         val base = (s - pan - center) / zoom + center
         return Point(((base.x - ox) / scale).toDouble(), ((base.y - oy) / scale).toDouble())
     }
 }
 
+/** Инструмент редактора на нижней панели. */
+enum class Tool { SELECT, ERASE, MEASURE }
+
+/** Что попало под палец в режиме «Стереть». */
+sealed interface EraseHit {
+    data class PointHit(val ref: PointRef) : EraseHit
+    data class Segment(val target: MeasureTarget) : EraseHit
+    data class ColumnHit(val id: String) : EraseHit
+}
+
 /**
- * Рабочее поле плана. VIEW — стены раскрашены, нажатие выбирает стену или участок
- * инженерии, двумя пальцами — масштаб и сдвиг. DRAW_OUTLINE — рисуем контур
- * (координаты экрана), DRAW_ROUTE — трассу (координаты плана, метры).
+ * Рабочее поле плана.
+ * VIEW + SELECT — нажатие выбирает стену/участок для замера, за активные точки можно
+ * тянуть (соседние линии тянутся следом), двумя пальцами — масштаб и сдвиг.
+ * VIEW + ERASE — нажатие стирает точку, линию или колонну.
+ * VIEW + MEASURE — два нажатия меряют расстояние по плану.
+ * DRAW_OUTLINE — рисуем контур (координаты экрана), DRAW_ROUTE/EXTRA — линию (метры плана).
  */
 @Composable
 fun PlanCanvas(
@@ -119,37 +138,88 @@ fun PlanCanvas(
     modifier: Modifier = Modifier,
     /** Этап «Инженерия»: стены и колонны — бледный фон, активны только трассы. */
     engineeringStage: Boolean = false,
+    tool: Tool = Tool.SELECT,
+    onPointMove: (PointRef, Point, Double) -> Unit = { _, _, _ -> },
+    onErase: (EraseHit) -> Unit = {},
+    measureA: Point? = null,
+    measureB: Point? = null,
+    onMeasureTap: (Point) -> Unit = {},
 ) {
     val density = LocalDensity.current
     val pad = with(density) { 44.dp.toPx() }
     val hitRadius = with(density) { 28.dp.toPx() }
+    val handleRadius = with(density) { 22.dp.toPx() }
     var size by remember { mutableStateOf(IntSize.Zero) }
     var zoom by remember(room.id) { mutableFloatStateOf(1f) }
     var pan by remember(room.id) { mutableStateOf(Offset.Zero) }
+    var dragRef by remember { mutableStateOf<PointRef?>(null) }
+    var dragPos by remember { mutableStateOf(Offset.Zero) }
     val stroke = remember { mutableStateListOf<Offset>() }
     val measurer = rememberTextMeasurer()
 
-    val plan = if (mode == CanvasMode.DRAW_OUTLINE) null else Plan.room(room)
-    val view = View(plan?.vertices ?: emptyList(), size, pad, zoom, pan)
-    val walls = plan?.walls?.map { view.toScreen(it.a) to view.toScreen(it.b) } ?: emptyList()
+    val basePlan = if (mode == CanvasMode.DRAW_OUTLINE) null else Plan.room(room)
+    val view = View(basePlan?.vertices ?: emptyList(), size, pad, zoom, pan)
+    val snapMeters = handleRadius * view.metersPerPx()
+
     // На этапе «Помещения» инженерию не показываем; на этапе «Инженерия» дорисованные стены — фон.
-    val routes = if (plan == null) emptyList() else room.engineering
-        .filter { it.hasRoute && (engineeringStage || it.type.category != Category.ENGINEERING) }
-        .map { e -> e to Plan.route(room, plan, e).map(view::toScreen) }
+    fun visible(e: EngElement) = engineeringStage || e.type.category != Category.ENGINEERING
     fun isActive(e: EngElement) = (e.type.category == Category.ENGINEERING) == engineeringStage
+    fun draggable(r: PointRef) = when (r) {
+        is PointRef.Vertex -> !engineeringStage
+        is PointRef.RoutePoint -> room.engineering.firstOrNull { it.id == r.elementId }?.let(::isActive) == true
+    }
+
+    // Во время перетаскивания показываем результат вживую; вид не перестраиваем,
+    // а сдвигаем план так, чтобы неподвижные вершины остались на месте.
+    var shown = room
+    var delta = Point(0.0, 0.0)
+    val ref = dragRef
+    if (ref != null && basePlan != null) {
+        val preview = Edit.movePoint(room, ref, view.toPlan(dragPos), snapMeters)
+        val previewPlan = Plan.room(preview)
+        val origin = Edit.points(room).firstOrNull { it.first == ref }?.second
+        val anchor = basePlan.vertices.indices.firstOrNull { i ->
+            origin == null || kotlin.math.hypot(basePlan.vertices[i].x - origin.x, basePlan.vertices[i].y - origin.y) > Edit.SAME_POINT_M
+        }
+        if (previewPlan != null && anchor != null && anchor < previewPlan.vertices.size) {
+            shown = preview
+            delta = Point(basePlan.vertices[anchor].x - previewPlan.vertices[anchor].x, basePlan.vertices[anchor].y - previewPlan.vertices[anchor].y)
+        }
+    }
+    val plan = if (shown === room) basePlan else Plan.room(shown)
+    val toScreen: (Point) -> Offset = { p -> view.toScreen(Point(p.x + delta.x, p.y + delta.y)) }
+
+    val walls = plan?.walls?.map { toScreen(it.a) to toScreen(it.b) } ?: emptyList()
+    val routes = if (plan == null) emptyList() else shown.engineering
+        .filter { it.hasRoute && visible(it) }
+        .map { e -> e to Plan.route(shown, plan, e).map(toScreen) }
+    val columns = if (plan == null) emptyList() else shown.columns.map { it to Columns.plan(shown, plan, it) }
+    val allPoints = if (plan == null) emptyList() else Edit.points(shown, ::visible).map { it.first to toScreen(it.second) }
+    val handles = allPoints.filter { draggable(it.first) }
     val wallAlpha = if (engineeringStage) 0.3f else 1f
 
-    val columns = if (plan == null) emptyList() else room.columns.map { it to Columns.plan(room, plan, it) }
     val current by rememberUpdatedState(Triple(walls, routes, view))
     val currentColumns by rememberUpdatedState(columns)
+    val currentHandles by rememberUpdatedState(handles)
+    val currentPoints by rememberUpdatedState(allPoints)
+    val toolState by rememberUpdatedState(tool)
+    val snapState by rememberUpdatedState(snapMeters)
     val onColumnTapState by rememberUpdatedState(onColumnTap)
     val onOutlineState by rememberUpdatedState(onOutline)
     val onRouteState by rememberUpdatedState(onRoute)
     val onTapState by rememberUpdatedState(onTap)
+    val onPointMoveState by rememberUpdatedState(onPointMove)
+    val onEraseState by rememberUpdatedState(onErase)
+    val onMeasureTapState by rememberUpdatedState(onMeasureTap)
 
     val outlineColor = MaterialTheme.colorScheme.outlineVariant
     val strokeColor = MaterialTheme.colorScheme.primary
     val labelBg = MaterialTheme.colorScheme.surface
+    val handleFill = MaterialTheme.colorScheme.surface
+    val handleStroke = MaterialTheme.colorScheme.onSurface
+
+    fun nearestPoint(list: List<Pair<PointRef, Offset>>, pos: Offset, radius: Float) =
+        list.minByOrNull { (it.second - pos).getDistance() }?.takeIf { (it.second - pos).getDistance() <= radius }
 
     val gestures = when (mode) {
         CanvasMode.DRAW_OUTLINE, CanvasMode.DRAW_ROUTE, CanvasMode.DRAW_EXTRA -> Modifier.pointerInput(mode) {
@@ -191,7 +261,6 @@ fun PlanCanvas(
                     onDoubleTap = { zoom = 1f; pan = Offset.Zero },
                     onTap = { pos ->
                         val (w, r, v) = current
-                        // Нажатие внутри колонны (или рядом с её центром) открывает колонну.
                         val hitColumn = currentColumns.firstOrNull { (_, cp) ->
                             val c = v.toScreen(cp.center)
                             val half = maxOf(cp.width, cp.depth) / 2
@@ -211,12 +280,44 @@ fun PlanCanvas(
                             val d = distanceToSegment(pos, a, b)
                             if (d < bestDist) { bestDist = d; best = MeasureTarget.Wall(i) }
                         }
-                        when {
-                            hitColumn != null && !engineeringStage -> onColumnTapState(hitColumn.first.id)
-                            else -> best?.let(onTapState)
+                        when (toolState) {
+                            Tool.SELECT -> when {
+                                hitColumn != null && !engineeringStage -> onColumnTapState(hitColumn.first.id)
+                                else -> best?.let(onTapState)
+                            }
+                            Tool.ERASE -> {
+                                val point = nearestPoint(currentHandles, pos, handleRadius)
+                                when {
+                                    point != null -> onEraseState(EraseHit.PointHit(point.first))
+                                    hitColumn != null && !engineeringStage -> onEraseState(EraseHit.ColumnHit(hitColumn.first.id))
+                                    else -> best?.let { onEraseState(EraseHit.Segment(it)) }
+                                }
+                            }
+                            Tool.MEASURE -> {
+                                // Точка замера прилипает к ближайшей активной точке.
+                                val point = nearestPoint(currentPoints, pos, handleRadius)
+                                onMeasureTapState(point?.let { v.toPlan(it.second) } ?: v.toPlan(pos))
+                            }
                         }
                     },
                 )
+            }
+            .pointerInput("drag") {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    if (toolState != Tool.SELECT) return@awaitEachGesture
+                    val hit = nearestPoint(currentHandles, down.position, handleRadius) ?: return@awaitEachGesture
+                    val start = awaitTouchSlopOrCancellation(down.id) { change, _ -> change.consume() }
+                        ?: return@awaitEachGesture
+                    dragRef = hit.first
+                    dragPos = start.position
+                    val completed = drag(start.id) { change ->
+                        dragPos = change.position
+                        change.consume()
+                    }
+                    if (completed) onPointMoveState(hit.first, current.third.toPlan(dragPos), snapState)
+                    dragRef = null
+                }
             }
     }
 
@@ -236,7 +337,7 @@ fun PlanCanvas(
             }
             if (!engineeringStage) {
                 walls.forEachIndexed { i, (a, b) ->
-                    val text = room.walls.getOrNull(i)?.let { "${i + 1}: ${it.millimeters}" } ?: "${i + 1}"
+                    val text = shown.walls.getOrNull(i)?.let { "${i + 1}: ${it.millimeters}" } ?: "${i + 1}"
                     label(measurer, text, wallColor(i, n), a, b, outward = true, labelBg)
                 }
             }
@@ -253,7 +354,6 @@ fun PlanCanvas(
                     val sel = selected == MeasureTarget.EngSegment(e.id, i)
                     drawLine(color, pts[i], pts[i + 1], (if (sel) width + 4.dp else width).toPx(), StrokeCap.Round, dash)
                 }
-                pts.forEach { drawCircle(color, 4.dp.toPx(), it) }
                 if (active) for (i in 0 until pts.size - 1) {
                     val len = e.segments.getOrNull(i)?.millimeters
                     val text = if (i == 0) "${e.sectionText.ifEmpty { e.type.title }}${len?.let { " · $it" } ?: ""}" else len?.toString() ?: continue
@@ -261,7 +361,28 @@ fun PlanCanvas(
                 }
             }
             columns.forEach { (col, cp) ->
-                drawColumn(view, cp, col, selected, measurer, labelBg, "К${room.columns.indexOf(col) + 1}", faded = engineeringStage)
+                drawColumn(toScreen, cp, col, selected, measurer, labelBg, "К${shown.columns.indexOf(col) + 1}", faded = engineeringStage)
+            }
+            // Активные точки — за них можно тянуть, к ним прилипают линии и линейка.
+            if (mode == CanvasMode.VIEW) {
+                handles.forEach { (r, p) ->
+                    val active = r == dragRef
+                    val radius = (if (active) 8.dp else 5.dp).toPx()
+                    drawCircle(if (active) strokeColor else handleFill, radius, p)
+                    drawCircle(if (tool == Tool.ERASE) Color(0xFFE53935) else handleStroke, radius, p, style = Stroke(1.5.dp.toPx()))
+                }
+            }
+            // Линейка.
+            if (tool == Tool.MEASURE && plan != null) {
+                val a = measureA?.let(toScreen)
+                val b = measureB?.let(toScreen)
+                if (measureA != null && measureB != null && a != null && b != null) {
+                    drawLine(strokeColor, a, b, 2.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 6f)))
+                    val meters = kotlin.math.hypot(measureB.x - measureA.x, measureB.y - measureA.y)
+                    val text = (if (plan.estimated) "≈ " else "") + fmtMm(meters)
+                    label(measurer, text, strokeColor, a, b, outward = true, labelBg)
+                }
+                listOfNotNull(a, b).forEach { drawCircle(strokeColor, 6.dp.toPx(), it) }
             }
             if (stroke.size > 1) {
                 val path = Path().apply {
@@ -279,7 +400,7 @@ private val AxisColor = Color(0xFFE57373)
 
 /** Колонна: контур с заливкой, штриховые оси на всю комнату и размерные линии привязок. */
 private fun DrawScope.drawColumn(
-    view: View,
+    toScreen: (Point) -> Offset,
     cp: ColumnPlan,
     col: Column,
     selected: MeasureTarget?,
@@ -292,23 +413,23 @@ private fun DrawScope.drawColumn(
     val k = if (faded) 0.3f else 1f
     val cc = ColumnColor.copy(alpha = k)
     val ac = AxisColor.copy(alpha = 0.6f * k)
-    val c = view.toScreen(cp.center)
+    val c = toScreen(cp.center)
     // Оси — тонкие штриховые линии через центр, далеко за пределы колонны.
     val dash = PathEffect.dashPathEffect(floatArrayOf(14f, 8f, 3f, 8f))
     val reach = 50.0
     for (dir in listOf(cp.u, cp.v)) {
-        val a = view.toScreen(Point(cp.center.x - dir.x * reach, cp.center.y - dir.y * reach))
-        val b = view.toScreen(Point(cp.center.x + dir.x * reach, cp.center.y + dir.y * reach))
+        val a = toScreen(Point(cp.center.x - dir.x * reach, cp.center.y - dir.y * reach))
+        val b = toScreen(Point(cp.center.x + dir.x * reach, cp.center.y + dir.y * reach))
         drawLine(ac, a, b, 1.dp.toPx(), pathEffect = dash)
     }
     val stroke = (if (sel) 4.dp else 2.5.dp).toPx()
     if (cp.round) {
-        val r = (view.toScreen(Point(cp.center.x + cp.width / 2 * cp.u.x, cp.center.y + cp.width / 2 * cp.u.y)) - c).getDistance()
+        val r = (toScreen(Point(cp.center.x + cp.width / 2 * cp.u.x, cp.center.y + cp.width / 2 * cp.u.y)) - c).getDistance()
         drawCircle(cc.copy(alpha = 0.25f * k), r, c)
         drawCircle(cc, r, c, style = Stroke(stroke))
     } else {
         val path = Path().apply {
-            val pts = cp.corners.map(view::toScreen)
+            val pts = cp.corners.map(toScreen)
             moveTo(pts[0].x, pts[0].y)
             pts.drop(1).forEach { lineTo(it.x, it.y) }
             close()
@@ -320,7 +441,7 @@ private fun DrawScope.drawColumn(
     // Привязки: линия от стены до оси с длиной.
     listOf(cp.footU to col.offsetU, cp.footV to col.offsetV).forEach { (foot, m) ->
         if (foot == null) return@forEach
-        val f = view.toScreen(foot)
+        val f = toScreen(foot)
         drawLine(cc, f, c, 1.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)))
         drawCircle(cc, 3.dp.toPx(), f)
         val meters = kotlin.math.hypot(cp.center.x - foot.x, cp.center.y - foot.y)

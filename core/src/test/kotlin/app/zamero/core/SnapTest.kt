@@ -49,4 +49,12 @@ class SnapTest {
         assertEquals("Перегородка 100 мм", p.label)
         assertEquals("Линия", EngElement("y", EngType.LINE).label)
     }
+
+    @Test
+    fun `line ends stick to existing points`() {
+        val drawn = listOf(Point(0.05, 0.04), Point(2.0, 0.0), Point(2.0, 1.0))
+        val out = Snap.endsToPoints(drawn, listOf(Point(0.0, 0.0), Point(4.0, 3.0)), tolerance = 0.1)
+        assertNear(Point(0.0, 0.0), out[0])
+        assertNear(Point(2.0, 1.0), out[2])
+    }
 }

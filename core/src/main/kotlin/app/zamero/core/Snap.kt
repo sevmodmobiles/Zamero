@@ -18,6 +18,17 @@ object Snap {
         return out
     }
 
+    /** Концы линии, оказавшиеся ближе [tolerance] к готовой точке, ставятся точно в неё. */
+    fun endsToPoints(route: List<Point>, points: List<Point>, tolerance: Double): List<Point> {
+        if (route.size < 2 || points.isEmpty()) return route
+        val out = route.toMutableList()
+        for (i in listOf(0, out.lastIndex)) {
+            val nearest = points.minBy { hypot(it.x - out[i].x, it.y - out[i].y) }
+            if (hypot(nearest.x - out[i].x, nearest.y - out[i].y) <= tolerance) out[i] = nearest
+        }
+        return out
+    }
+
     private fun snapEnd(pts: MutableList<Point>, end: Int, inner: Int, walls: List<Pair<Point, Point>>, tol: Double) {
         val p = pts[end]
         val q = pts[inner]

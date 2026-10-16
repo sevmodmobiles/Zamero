@@ -7,6 +7,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.zamero.core.Column
+import app.zamero.core.Edit
 import app.zamero.core.EngElement
 import app.zamero.core.EngType
 import app.zamero.core.Measure
@@ -15,6 +16,7 @@ import app.zamero.core.MeasureTarget
 import app.zamero.core.Opening
 import app.zamero.core.OpeningType
 import app.zamero.core.Point
+import app.zamero.core.PointRef
 import app.zamero.core.Project
 import app.zamero.core.Room
 import app.zamero.core.Source
@@ -54,7 +56,10 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
     /** История для «Отменить»: предыдущие состояния всех объектов. */
     private val history = ArrayDeque<List<Project>>()
+    private val future = ArrayDeque<List<Project>>()
     var canUndo by mutableStateOf(false)
+        private set
+    var canRedo by mutableStateOf(false)
         private set
 
     var update by mutableStateOf<Updater.Release?>(null)
@@ -236,13 +241,32 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
     fun undo() {
         val previous = history.removeLastOrNull() ?: return
+        future.addLast(projects)
+        restore(previous)
+    }
+
+    fun redo() {
+        val next = future.removeLastOrNull() ?: return
+        history.addLast(projects)
+        restore(next)
+    }
+
+    private fun restore(list: List<Project>) {
         canUndo = history.isNotEmpty()
-        projects = previous
+        canRedo = future.isNotEmpty()
+        projects = list
         dialogTarget = null
         routingElementId = null
         if (openProject == null) closeProject()
-        viewModelScope.launch(Dispatchers.IO) { store.save(previous) }
+        viewModelScope.launch(Dispatchers.IO) { store.save(list) }
     }
+
+    // --- Правка точек --------------------------------------------------------
+
+    /** Перетаскивание активной точки (координаты плана, м). */
+    fun movePoint(ref: PointRef, target: Point, snap: Double) = editRoom { Edit.movePoint(this, ref, target, snap) }
+
+    fun deletePoint(ref: PointRef) = editRoom { Edit.deletePoint(Edit.rebase(this), ref) }
 
     // --- Обновление ----------------------------------------------------------
 
@@ -325,7 +349,9 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     private fun saveProjects(list: List<Project>) {
         history.addLast(projects)
         if (history.size > HISTORY_SIZE) history.removeFirst()
+        future.clear()
         canUndo = true
+        canRedo = false
         projects = list
         viewModelScope.launch(Dispatchers.IO) { store.save(list) }
     }
