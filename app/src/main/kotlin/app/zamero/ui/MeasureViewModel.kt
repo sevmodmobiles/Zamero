@@ -279,6 +279,14 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     fun setSegmentElevation(elementId: String, index: Int, mm: Int?) =
         editRoom { Edit.setSegmentElevation(this, elementId, index, mm) }
 
+    /** Дорисованная линия закрывает разрыв контура (метры плана). false — не закрывает. */
+    fun closeGap(line: List<Point>, tolerance: Double): Boolean {
+        val room = openRoom ?: return false
+        val closed = Edit.closeGap(room, line, tolerance) ?: return false
+        replaceRoom(closed)
+        return true
+    }
+
     /** Удаление выбранного лассо — одним шагом отмены. */
     fun eraseMany(segments: Set<Pair<String, Int>>, columnIds: Set<String>, walls: Set<Int> = emptySet()): Boolean {
         val room = openRoom ?: return false

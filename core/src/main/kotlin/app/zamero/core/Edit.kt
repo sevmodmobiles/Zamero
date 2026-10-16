@@ -274,6 +274,50 @@ object Edit {
         )
     }
 
+    /**
+     * Дорисованная линия [line] (метры плана) соединяет концы разрыва в контуре —
+     * она встаёт на место стёртых стен и контур снова замкнут. null — линия не
+     * соединяет концы ни одного разрыва (тогда это обычная доп. стена).
+     */
+    fun closeGap(room: Room, line: List<Point>, tolerance: Double): Room? {
+        if (line.size < 2 || room.removedWalls.isEmpty()) return null
+        val n = room.outline.size
+        if (room.removedWalls.size >= n) return null
+        val s = Plan.scale(room)
+        val base = rebase(room)
+        val plan = Plan.room(base) ?: return null
+        val removed = room.removedWalls
+        // Серии подряд стёртых стен: от вершины start до вершины start + k.
+        for (start in removed.filter { (it - 1 + n) % n !in removed }) {
+            var k = 0
+            while ((start + k) % n in removed) k++
+            val end = (start + k) % n
+            val a = plan.vertices[start]
+            val b = plan.vertices[end]
+            val inner = when {
+                dist(line.first(), a) <= tolerance && dist(line.last(), b) <= tolerance -> line.subList(1, line.size - 1)
+                dist(line.first(), b) <= tolerance && dist(line.last(), a) <= tolerance -> line.subList(1, line.size - 1).reversed()
+                else -> continue
+            }
+            // Новый порядок вершин: от конца разрыва по контуру до его начала, затем точки линии.
+            val order = (0..n - k).map { (end + it) % n } // end … start
+            val outline = order.map { Point(base.outline[it].x, base.outline[it].y) } + inner.map { Point(it.x / s, it.y / s) }
+            val walls = order.mapIndexed { idx, o -> if (idx == order.lastIndex) null else base.walls[o] } + inner.map { null }
+            fun remap(o: Int): Int = order.indexOf(o).takeIf { it in 0 until order.lastIndex } ?: -1
+            return base.copy(
+                outline = outline,
+                walls = walls,
+                removedWalls = removed.filter { (it - start + n) % n >= k }.map(::remap).filter { it >= 0 }.toSet(),
+                columns = base.columns.map { c ->
+                    val u = remap(c.refWallU)
+                    val v = remap(c.refWallV)
+                    c.copy(refWallU = u, refWallV = v, offsetU = c.offsetU.takeIf { u >= 0 }, offsetV = c.offsetV.takeIf { v >= 0 })
+                },
+            )
+        }
+        return null
+    }
+
     /** Своя высота участка (мм) или null — как у всей трассы. */
     fun setSegmentElevation(room: Room, elementId: String, index: Int, mm: Int?): Room = room.copy(
         engineering = room.engineering.map { e ->

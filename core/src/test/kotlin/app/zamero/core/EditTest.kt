@@ -128,4 +128,28 @@ class EditTest {
         assertEquals(3 + 1, dxf.count { it == "POLYLINE" })
         assertTrue("Контур не замкнут (стёрты стены 2)" in Report.text(Project("p", "А", rooms = listOf(r))))
     }
+
+    @Test
+    fun `drawn wall across a gap closes the contour`() {
+        // Стёрта стена 2 (правая, от (4,0) до (4,3)); дорисовываем её обратно снизу вверх.
+        val gap = Edit.deleteWalls(room(), setOf(1))
+        val closed = assertNotNull(Edit.closeGap(gap, listOf(Point(4.0, 3.0), Point(4.0, 0.0)), tolerance = 0.01))
+        assertTrue(closed.isClosed)
+        assertEquals(4, closed.outline.size)
+        assertEquals(12.0, Geometry.stats(closed.copy(walls = listOf(m(4.0), m(3.0), m(4.0), m(3.0)))).floorArea!!, 1e-9)
+        // Замеры уцелевших стен сохранились, новая стена — не измерена.
+        assertEquals(3, closed.walls.count { it != null })
+    }
+
+    @Test
+    fun `L-shaped wall closes a gap of two walls`() {
+        val gap = Edit.deleteWalls(room(), setOf(1, 2)) // стёрты правая и нижняя
+        val line = listOf(Point(4.0, 0.0), Point(3.0, 0.0), Point(3.0, 3.0), Point(0.0, 3.0))
+        // Линия не начинается в конце разрыва — не подходит.
+        assertNull(Edit.closeGap(gap, listOf(Point(1.0, 1.0), Point(2.0, 1.0)), 0.01))
+        val closed = assertNotNull(Edit.closeGap(gap, listOf(Point(4.0, 0.0), Point(4.0, 2.0), Point(0.0, 2.0), Point(0.0, 3.0)), 0.01))
+        assertTrue(closed.isClosed)
+        assertEquals(5, closed.outline.size)
+        assertEquals(line.size, 4)
+    }
 }

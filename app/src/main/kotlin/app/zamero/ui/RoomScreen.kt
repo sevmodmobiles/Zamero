@@ -187,7 +187,11 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                 when (mode) {
                     CanvasMode.DRAW_OUTLINE -> "Нарисуйте контур одной линией — она выпрямится сама"
                     CanvasMode.DRAW_ROUTE -> "Проведите трассу «${routing?.label}» поверх плана"
-                    CanvasMode.DRAW_EXTRA -> if (eng) "Проведите трассу пальцем — она выровняется вдоль стен" else "Дорисуйте стену или перегородку; обведите колонну"
+                    CanvasMode.DRAW_EXTRA -> when {
+                        eng -> "Проведите трассу пальцем — она выровняется вдоль стен"
+                        !room.isClosed -> "Проведите стену от края до края разрыва — контур замкнётся"
+                        else -> "Дорисуйте стену или перегородку; обведите колонну"
+                    }
                     CanvasMode.VIEW -> when (tool) {
                         Tool.SELECT -> summary(room, eng) + " · точки можно тянуть"
                         Tool.ERASE -> if (eraseSelection.isEmpty()) {
@@ -247,6 +251,14 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                         val line = straightenAndSnap(room, plan, planStroke, excludeId = routing?.id)
                         if (line == null) {
                             Toast.makeText(context, "Линия слишком короткая — проведите длиннее", Toast.LENGTH_SHORT).show()
+                            return@PlanCanvas
+                        }
+                        // Стена, соединившая концы разрыва, становится частью контура.
+                        if (routing == null && !eng && !room.isClosed &&
+                            vm.closeGap(line, tolerance = planDiagonal(plan) * 0.01)
+                        ) {
+                            drawingExtra = false
+                            Toast.makeText(context, "Контур замкнут", Toast.LENGTH_SHORT).show()
                             return@PlanCanvas
                         }
                         val sketch = line.map { Plan.toSketch(room, plan, it) }
