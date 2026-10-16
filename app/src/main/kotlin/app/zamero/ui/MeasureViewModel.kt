@@ -39,6 +39,10 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         private set
     var openRoomId by mutableStateOf<String?>(null)
         private set
+    /** Этап работы с объектом: сначала помещения, потом инженерия. */
+    var engineeringStage by mutableStateOf(false)
+        private set
+
     /** Открытое окно ввода длины. */
     var dialogTarget by mutableStateOf<MeasureTarget?>(null)
         private set
@@ -92,6 +96,11 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     fun openProject(id: String) {
         openProjectId = id
         openRoomId = null
+        engineeringStage = false
+    }
+
+    fun setStage(engineering: Boolean) {
+        engineeringStage = engineering
     }
 
     fun closeProject() {
@@ -151,7 +160,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         val room = openRoom ?: return
         val updated = MeasureFlow.set(room, target, meters?.let { Measure(it, source) })
         replaceRoom(updated)
-        dialogTarget = if (goNext) MeasureFlow.nextEmpty(updated, target) else null
+        dialogTarget = if (goNext) MeasureFlow.nextEmpty(updated, target, engineeringStage) else null
     }
 
     fun addOpening(type: OpeningType) {

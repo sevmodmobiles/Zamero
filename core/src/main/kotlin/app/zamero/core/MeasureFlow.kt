@@ -84,9 +84,22 @@ object MeasureFlow {
         )
     }
 
-    /** Первое пустое поле после [current] (по кругу), или null, если всё измерено. */
-    fun nextEmpty(room: Room, current: MeasureTarget? = null): MeasureTarget? {
-        val all = targets(room)
+    /** Относится ли поле к этапу «Инженерия» (участки инженерных трасс). */
+    fun isEngineering(room: Room, target: MeasureTarget): Boolean =
+        target is MeasureTarget.EngSegment &&
+            room.engineering.firstOrNull { it.id == target.elementId }?.type?.category == Category.ENGINEERING
+
+    /** Поля этапа: помещения (всё, кроме инженерии) или только инженерия. */
+    fun targets(room: Room, engineering: Boolean): List<MeasureTarget> =
+        targets(room).filter { isEngineering(room, it) == engineering }
+
+    /**
+     * Первое пустое поле после [current] (по кругу), или null, если всё измерено.
+     * [engineering] — ограничить этапом (null — все поля).
+     */
+    fun nextEmpty(room: Room, current: MeasureTarget? = null, engineering: Boolean? = null): MeasureTarget? {
+        val all = if (engineering == null) targets(room) else targets(room, engineering)
+        if (all.isEmpty()) return null
         val start = current?.let { all.indexOf(it) + 1 } ?: 0
         return (all.indices).asSequence()
             .map { all[(start + it) % all.size] }

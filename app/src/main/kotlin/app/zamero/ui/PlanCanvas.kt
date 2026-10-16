@@ -42,9 +42,11 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.zamero.core.Category
 import app.zamero.core.Column
 import app.zamero.core.ColumnPlan
 import app.zamero.core.Columns
+import app.zamero.core.EngElement
 import app.zamero.core.EngType
 import app.zamero.core.MeasureTarget
 import app.zamero.core.Plan
@@ -115,6 +117,8 @@ fun PlanCanvas(
     onTap: (MeasureTarget) -> Unit,
     onColumnTap: (String) -> Unit,
     modifier: Modifier = Modifier,
+    /** Этап «Инженерия»: стены и колонны — бледный фон, активны только трассы. */
+    engineeringStage: Boolean = false,
 ) {
     val density = LocalDensity.current
     val pad = with(density) { 44.dp.toPx() }
@@ -128,9 +132,12 @@ fun PlanCanvas(
     val plan = if (mode == CanvasMode.DRAW_OUTLINE) null else Plan.room(room)
     val view = View(plan?.vertices ?: emptyList(), size, pad, zoom, pan)
     val walls = plan?.walls?.map { view.toScreen(it.a) to view.toScreen(it.b) } ?: emptyList()
-    val routes = if (plan == null) emptyList() else room.engineering.filter { it.hasRoute }.map { e ->
-        e to Plan.route(room, plan, e).map(view::toScreen)
-    }
+    // На этапе «Помещения» инженерию не показываем; на этапе «Инженерия» дорисованные стены — фон.
+    val routes = if (plan == null) emptyList() else room.engineering
+        .filter { it.hasRoute && (engineeringStage || it.type.category != Category.ENGINEERING) }
+        .map { e -> e to Plan.route(room, plan, e).map(view::toScreen) }
+    fun isActive(e: EngElement) = (e.type.category == Category.ENGINEERING) == engineeringStage
+    val wallAlpha = if (engineeringStage) 0.3f else 1f
 
     val columns = if (plan == null) emptyList() else room.columns.map { it to Columns.plan(room, plan, it) }
     val current by rememberUpdatedState(Triple(walls, routes, view))
@@ -194,18 +201,18 @@ fun PlanCanvas(
                         var best: MeasureTarget? = null
                         var bestDist = hitRadius
                         // Инженерия лежит поверх стен — проверяем её первой и с небольшим приоритетом.
-                        r.forEach { (e, pts) ->
+                        r.filter { isActive(it.first) }.forEach { (e, pts) ->
                             for (i in 0 until pts.size - 1) {
                                 val d = distanceToSegment(pos, pts[i], pts[i + 1]) * 0.8f
                                 if (d < bestDist) { bestDist = d; best = MeasureTarget.EngSegment(e.id, i) }
                             }
                         }
-                        w.forEachIndexed { i, (a, b) ->
+                        if (!engineeringStage) w.forEachIndexed { i, (a, b) ->
                             val d = distanceToSegment(pos, a, b)
                             if (d < bestDist) { bestDist = d; best = MeasureTarget.Wall(i) }
                         }
                         when {
-                            hitColumn != null -> onColumnTapState(hitColumn.first.id)
+                            hitColumn != null && !engineeringStage -> onColumnTapState(hitColumn.first.id)
                             else -> best?.let(onTapState)
                         }
                     },
@@ -225,14 +232,17 @@ fun PlanCanvas(
             val n = walls.size
             walls.forEachIndexed { i, (a, b) ->
                 val sel = selected == MeasureTarget.Wall(i)
-                drawLine(wallColor(i, n), a, b, (if (sel) 9.dp else 5.dp).toPx(), StrokeCap.Round)
+                drawLine(wallColor(i, n).copy(alpha = wallAlpha), a, b, (if (sel) 9.dp else 5.dp).toPx(), StrokeCap.Round)
             }
-            walls.forEachIndexed { i, (a, b) ->
-                val text = room.walls.getOrNull(i)?.let { "${i + 1}: ${it.millimeters}" } ?: "${i + 1}"
-                label(measurer, text, wallColor(i, n), a, b, outward = true, labelBg)
+            if (!engineeringStage) {
+                walls.forEachIndexed { i, (a, b) ->
+                    val text = room.walls.getOrNull(i)?.let { "${i + 1}: ${it.millimeters}" } ?: "${i + 1}"
+                    label(measurer, text, wallColor(i, n), a, b, outward = true, labelBg)
+                }
             }
             routes.forEach { (e, pts) ->
-                val color = engColor(e.type)
+                val active = isActive(e)
+                val color = engColor(e.type).copy(alpha = if (active) 1f else wallAlpha)
                 val dash = if (e.type == EngType.DRAIN) PathEffect.dashPathEffect(floatArrayOf(18f, 10f)) else null
                 val width = when (e.type) {
                     EngType.WALL -> 5.dp
@@ -244,14 +254,14 @@ fun PlanCanvas(
                     drawLine(color, pts[i], pts[i + 1], (if (sel) width + 4.dp else width).toPx(), StrokeCap.Round, dash)
                 }
                 pts.forEach { drawCircle(color, 4.dp.toPx(), it) }
-                for (i in 0 until pts.size - 1) {
+                if (active) for (i in 0 until pts.size - 1) {
                     val len = e.segments.getOrNull(i)?.millimeters
                     val text = if (i == 0) "${e.sectionText.ifEmpty { e.type.title }}${len?.let { " · $it" } ?: ""}" else len?.toString() ?: continue
                     label(measurer, text, color, pts[i], pts[i + 1], outward = false, labelBg)
                 }
             }
             columns.forEach { (col, cp) ->
-                drawColumn(view, cp, col, selected, measurer, labelBg, columnTitle = "К${room.columns.indexOf(col) + 1}")
+                drawColumn(view, cp, col, selected, measurer, labelBg, "К${room.columns.indexOf(col) + 1}", faded = engineeringStage)
             }
             if (stroke.size > 1) {
                 val path = Path().apply {
@@ -276,8 +286,12 @@ private fun DrawScope.drawColumn(
     measurer: TextMeasurer,
     bg: Color,
     columnTitle: String,
+    faded: Boolean,
 ) {
     val sel = (selected as? MeasureTarget.ColumnValue)?.columnId == col.id
+    val k = if (faded) 0.3f else 1f
+    val cc = ColumnColor.copy(alpha = k)
+    val ac = AxisColor.copy(alpha = 0.6f * k)
     val c = view.toScreen(cp.center)
     // Оси — тонкие штриховые линии через центр, далеко за пределы колонны.
     val dash = PathEffect.dashPathEffect(floatArrayOf(14f, 8f, 3f, 8f))
@@ -285,13 +299,13 @@ private fun DrawScope.drawColumn(
     for (dir in listOf(cp.u, cp.v)) {
         val a = view.toScreen(Point(cp.center.x - dir.x * reach, cp.center.y - dir.y * reach))
         val b = view.toScreen(Point(cp.center.x + dir.x * reach, cp.center.y + dir.y * reach))
-        drawLine(AxisColor.copy(alpha = 0.6f), a, b, 1.dp.toPx(), pathEffect = dash)
+        drawLine(ac, a, b, 1.dp.toPx(), pathEffect = dash)
     }
     val stroke = (if (sel) 4.dp else 2.5.dp).toPx()
     if (cp.round) {
         val r = (view.toScreen(Point(cp.center.x + cp.width / 2 * cp.u.x, cp.center.y + cp.width / 2 * cp.u.y)) - c).getDistance()
-        drawCircle(ColumnColor.copy(alpha = 0.25f), r, c)
-        drawCircle(ColumnColor, r, c, style = Stroke(stroke))
+        drawCircle(cc.copy(alpha = 0.25f * k), r, c)
+        drawCircle(cc, r, c, style = Stroke(stroke))
     } else {
         val path = Path().apply {
             val pts = cp.corners.map(view::toScreen)
@@ -299,21 +313,22 @@ private fun DrawScope.drawColumn(
             pts.drop(1).forEach { lineTo(it.x, it.y) }
             close()
         }
-        drawPath(path, ColumnColor.copy(alpha = 0.25f))
-        drawPath(path, ColumnColor, style = Stroke(stroke))
+        drawPath(path, cc.copy(alpha = 0.25f * k))
+        drawPath(path, cc, style = Stroke(stroke))
     }
+    if (faded) return
     // Привязки: линия от стены до оси с длиной.
     listOf(cp.footU to col.offsetU, cp.footV to col.offsetV).forEach { (foot, m) ->
         if (foot == null) return@forEach
         val f = view.toScreen(foot)
-        drawLine(ColumnColor, f, c, 1.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)))
-        drawCircle(ColumnColor, 3.dp.toPx(), f)
+        drawLine(cc, f, c, 1.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)))
+        drawCircle(cc, 3.dp.toPx(), f)
         val meters = kotlin.math.hypot(cp.center.x - foot.x, cp.center.y - foot.y)
         val text = m?.millimeters?.toString() ?: "~${Math.round(meters * 1000)}"
-        label(measurer, text, ColumnColor, f, c, outward = true, bg)
+        label(measurer, text, cc, f, c, outward = true, bg)
     }
     val name = columnTitle + (col.sizeText?.let { " $it" } ?: "")
-    val layout = measurer.measure(name, TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Bold, color = ColumnColor))
+    val layout = measurer.measure(name, TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Bold, color = cc))
     drawText(layout, topLeft = Offset(c.x - layout.size.width / 2f, c.y - layout.size.height / 2f))
 }
 

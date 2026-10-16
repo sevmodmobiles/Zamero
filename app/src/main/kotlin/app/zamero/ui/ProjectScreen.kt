@@ -14,6 +14,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -27,10 +28,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.zamero.core.Category
 import app.zamero.core.Geometry
+import app.zamero.core.MeasureFlow
 import app.zamero.core.Project
 import app.zamero.core.Room
 
@@ -54,7 +58,9 @@ fun ProjectScreen(vm: MeasureViewModel, project: Project) {
             )
         },
         floatingActionButton = {
-            ExtendedFloatingActionButton(onClick = vm::addRoom) { Text("Помещение +") }
+            if (!vm.engineeringStage) {
+                ExtendedFloatingActionButton(onClick = vm::addRoom) { Text("Помещение +") }
+            }
         },
     ) { padding ->
         val total = project.rooms.sumOf { Geometry.stats(it).floorArea ?: 0.0 }
@@ -75,14 +81,41 @@ fun ProjectScreen(vm: MeasureViewModel, project: Project) {
                 }
             }
             item {
-                if (project.rooms.isEmpty()) {
-                    Text("Добавьте помещение и нарисуйте его контур пальцем.")
-                } else {
-                    Text("Общая площадь: ${fmtArea(total)}", style = MaterialTheme.typography.titleLarge)
+                // Этапы: сначала рисуем и меряем все помещения, потом прокладываем инженерию.
+                val drawn = project.rooms.count { it.hasOutline }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = !vm.engineeringStage,
+                        onClick = { vm.setStage(false) },
+                        label = { Text("1. Помещения") },
+                    )
+                    FilterChip(
+                        selected = vm.engineeringStage,
+                        onClick = { vm.setStage(true) },
+                        enabled = drawn > 0,
+                        label = { Text("2. Инженерия") },
+                    )
+                }
+            }
+            item {
+                val drawn = project.rooms.count { it.hasOutline }
+                when {
+                    project.rooms.isEmpty() -> Text("Добавьте помещение и нарисуйте его контур пальцем.")
+                    vm.engineeringStage && drawn < project.rooms.size -> Text(
+                        "Нарисовано помещений: $drawn из ${project.rooms.size}. Инженерию можно прокладывать " +
+                            "в нарисованных; остальные сначала нарисуйте на этапе «Помещения».",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    vm.engineeringStage -> Text("Выберите помещение, чтобы проложить трассы.", style = MaterialTheme.typography.bodyMedium)
+                    else -> Text("Общая площадь: ${fmtArea(total)}", style = MaterialTheme.typography.titleLarge)
                 }
             }
             items(project.rooms, key = { it.id }) { room ->
-                RoomCard(room, onOpen = { vm.openRoom(room.id) }, onDelete = { deletingRoom = room })
+                if (vm.engineeringStage) {
+                    EngRoomCard(room, onOpen = { vm.openRoom(room.id) })
+                } else {
+                    RoomCard(room, onOpen = { vm.openRoom(room.id) }, onDelete = { deletingRoom = room })
+                }
             }
             item {
                 OutlinedButton(onClick = { deletingProject = true }) { Text("Удалить объект") }
@@ -140,6 +173,28 @@ private fun RoomCard(room: Room, onOpen: () -> Unit, onDelete: () -> Unit) {
                 }
             }
             TextButton(onClick = onDelete) { Text("Удалить") }
+        }
+    }
+}
+
+/** Помещение на этапе «Инженерия»: сколько трасс и что осталось измерить. */
+@Composable
+private fun EngRoomCard(room: Room, onOpen: () -> Unit) {
+    val lines = room.engineering.filter { it.type.category == Category.ENGINEERING }
+    val left = MeasureFlow.targets(room, engineering = true).count { MeasureFlow.valueOf(room, it) == null }
+    Card(Modifier.fillMaxWidth().clickable(enabled = room.hasOutline, onClick = onOpen)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(room.name, style = MaterialTheme.typography.titleMedium)
+            Text(
+                when {
+                    !room.hasOutline -> "Контур не нарисован"
+                    lines.isEmpty() -> "Трасс пока нет"
+                    left > 0 -> "Трасс: ${lines.size} · не измерено участков: $left"
+                    else -> "Трасс: ${lines.size} · всё измерено"
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (room.hasOutline) Color.Unspecified else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

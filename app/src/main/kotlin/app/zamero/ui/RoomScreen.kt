@@ -88,9 +88,10 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
     val laserConnected = laserState is LaserState.Connected
     val target = vm.dialogTarget
     val routing = vm.routingElementId?.let { id -> room.engineering.firstOrNull { it.id == id } }
+    val eng = vm.engineeringStage
 
     val mode = when {
-        redrawing || !room.hasOutline -> CanvasMode.DRAW_OUTLINE
+        !eng && (redrawing || !room.hasOutline) -> CanvasMode.DRAW_OUTLINE
         routing != null -> CanvasMode.DRAW_ROUTE
         drawingExtra -> CanvasMode.DRAW_EXTRA
         else -> CanvasMode.VIEW
@@ -100,7 +101,13 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
         topBar = {
             TopAppBar(
                 navigationIcon = { TextButton(onClick = vm::closeRoom) { Text("Назад") } },
-                title = { Text(room.name, modifier = Modifier.clickable { renaming = true }) },
+                title = {
+                    Text(
+                        if (eng) "Инженерия · ${room.name}" else room.name,
+                        maxLines = 1,
+                        modifier = Modifier.clickable { renaming = true },
+                    )
+                },
                 actions = {
                     if (vm.canUndo) TextButton(onClick = vm::undo) { Text("↶") }
                     TextButton(onClick = { laserDialog = true }) {
@@ -115,8 +122,8 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                 when (mode) {
                     CanvasMode.DRAW_OUTLINE -> "Нарисуйте контур одной линией — она выпрямится сама"
                     CanvasMode.DRAW_ROUTE -> "Проведите трассу «${routing?.label}» поверх плана"
-                    CanvasMode.DRAW_EXTRA -> "Дорисуйте стену, перегородку или трассу инженерии; обведите колонну"
-                    CanvasMode.VIEW -> summary(room)
+                    CanvasMode.DRAW_EXTRA -> if (eng) "Проведите трассу пальцем — она выровняется вдоль стен" else "Дорисуйте стену или перегородку; обведите колонну"
+                    CanvasMode.VIEW -> summary(room, eng)
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -138,7 +145,7 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                 onRoute = { planStroke ->
                     val plan = Plan.room(room) ?: return@PlanCanvas
                     // Маленькая замкнутая фигура в режиме «Дорисовать» — это колонна.
-                    if (routing == null) {
+                    if (routing == null && !eng) {
                         val col = Columns.detect(planStroke, Columns.baseAngle(plan))
                         if (col != null && maxOf(col.width, col.depth) < planDiagonal(plan) * 0.35) {
                             drawingExtra = false
@@ -161,6 +168,7 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                 },
                 onTap = vm::openDialog,
                 onColumnTap = { openColumnId = it },
+                engineeringStage = eng,
                 modifier = Modifier.fillMaxWidth().weight(1f).padding(horizontal = 8.dp),
             )
             Row(
@@ -177,12 +185,12 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                     CanvasMode.DRAW_ROUTE -> TextButton(onClick = vm::cancelRouting) { Text("Отмена") }
                     CanvasMode.DRAW_EXTRA -> TextButton(onClick = { drawingExtra = false }) { Text("Отмена") }
                     CanvasMode.VIEW -> {
-                        FilledTonalButton(onClick = { drawingExtra = true }) { Text("Дорисовать") }
+                        FilledTonalButton(onClick = { drawingExtra = true }) { Text(if (eng) "Проложить трассу" else "Дорисовать") }
                         OutlinedButton(onClick = { specOpen = true }) { Text("Спецификация ▴") }
-                        MeasureFlow.nextEmpty(room)?.let { next ->
+                        MeasureFlow.nextEmpty(room, engineering = eng)?.let { next ->
                             OutlinedButton(onClick = { vm.openDialog(next) }) { Text("Мерить по порядку") }
                         }
-                        OutlinedButton(onClick = { redrawing = true }) { Text("Перерисовать") }
+                        if (!eng) OutlinedButton(onClick = { redrawing = true }) { Text("Перерисовать") }
                     }
                 }
             }
@@ -199,6 +207,7 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
             MeasureList(
                 vm,
                 room,
+                engineering = eng,
                 onEditEng = { engEdit = EngEdit(it.type, it); specOpen = false },
                 onPick = { t -> specOpen = false; vm.openDialog(t) },
                 onStartRoute = { e -> specOpen = false; vm.startRouting(e.id) },
@@ -209,7 +218,7 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
 
     if (target != null) {
         key(target) {
-            val after = MeasureFlow.nextEmpty(room, target)
+            val after = MeasureFlow.nextEmpty(room, target, eng)
             MeasureDialog(
                 title = MeasureFlow.label(room, target),
                 color = targetColor(room, target),
@@ -280,16 +289,11 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
     if (pendingRoute != null && extraType == null) {
         AlertDialog(
             onDismissRequest = { extraRoute = null },
-            title = { Text("Что дорисовали?") },
+            title = { Text(if (eng) "Что прокладываем?" else "Что дорисовали?") },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
-                    listOf(Category.CONSTRUCTION to "Стены", Category.ENGINEERING to "Инженерия").forEach { (category, header) ->
-                        Text(
-                            header,
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
-                        )
+                    run {
+                        val category = if (eng) Category.ENGINEERING else Category.CONSTRUCTION
                         EngType.entries.filter { it.category == category }.forEach { type ->
                             Row(
                                 Modifier.fillMaxWidth().clickable { extraType = type }.padding(vertical = 9.dp),
@@ -354,10 +358,14 @@ private fun straightenAndSnap(room: Room, plan: Plan.RoomPlan, stroke: List<Poin
     return Snap.extendToWalls(line, targets, tolerance = diag * 0.06)
 }
 
-/** Короткая сводка под заголовком: площадь и сколько осталось измерить. */
-private fun summary(room: Room): String {
-    val all = MeasureFlow.targets(room)
+/** Короткая сводка под заголовком: площадь и сколько осталось измерить на этом этапе. */
+private fun summary(room: Room, engineering: Boolean): String {
+    val all = MeasureFlow.targets(room, engineering)
     val left = all.count { MeasureFlow.valueOf(room, it) == null }
+    if (engineering) {
+        return if (all.isEmpty()) "Нажмите «Проложить трассу» и проведите линию по плану"
+        else if (left == 0) "Все участки трасс измерены" else "Не измерено участков: $left из ${all.size} · нажмите на трассу"
+    }
     val area = Geometry.stats(room).floorArea?.let { "Площадь ${fmtArea(it)} · " } ?: ""
     return area + if (left == 0) "всё измерено" else "осталось измерить: $left из ${all.size} · нажмите на стену"
 }
@@ -373,6 +381,7 @@ private fun targetColor(room: Room, target: MeasureTarget): Color? = when (targe
 private fun MeasureList(
     vm: MeasureViewModel,
     room: Room,
+    engineering: Boolean,
     onEditEng: (EngElement) -> Unit,
     onPick: (MeasureTarget) -> Unit,
     onStartRoute: (EngElement) -> Unit,
@@ -383,7 +392,7 @@ private fun MeasureList(
         contentPadding = PaddingValues(16.dp, 0.dp, 16.dp, 24.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        MeasureFlow.targets(room).forEach { t ->
+        MeasureFlow.targets(room, engineering).forEach { t ->
             when {
                 t is MeasureTarget.OpeningWidth -> item(key = "opening-${t.index}") {
                     SectionHeader(MeasureFlow.openingTitle(room, t.index)) {
@@ -410,13 +419,17 @@ private fun MeasureList(
                 MeasureRow(room, t, targetColor(room, t), selected = vm.dialogTarget == t, onClick = { onPick(t) })
             }
         }
-        item {
-            Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { vm.addOpening(OpeningType.WINDOW) }) { Text("+ Окно") }
-                OutlinedButton(onClick = { vm.addOpening(OpeningType.DOOR) }) { Text("+ Дверь") }
+        if (!engineering) {
+            item {
+                Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { vm.addOpening(OpeningType.WINDOW) }) { Text("+ Окно") }
+                    OutlinedButton(onClick = { vm.addOpening(OpeningType.DOOR) }) { Text("+ Дверь") }
+                }
             }
+        } else if (room.engineering.none { it.type.category == Category.ENGINEERING }) {
+            item { Text("Трасс пока нет — нажмите «Проложить трассу».", modifier = Modifier.padding(vertical = 8.dp)) }
         }
-        item { StatsCard(room) }
+        item { StatsCard(room, engineering) }
     }
 }
 
@@ -458,11 +471,17 @@ private fun MeasureRow(room: Room, target: MeasureTarget, color: Color?, selecte
 }
 
 @Composable
-private fun StatsCard(room: Room) {
+private fun StatsCard(room: Room, engineering: Boolean) {
     val s = Geometry.stats(room)
     Card(Modifier.fillMaxWidth().padding(top = 12.dp)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("Итоги", style = MaterialTheme.typography.titleMedium)
+            if (engineering) {
+                room.engineering.filter { it.type.category == Category.ENGINEERING }.forEach { e ->
+                    Text("${MeasureFlow.engTitle(room, e.id)}: ${e.totalLength?.let(::fmtMm) ?: "не все участки измерены"}")
+                }
+                return@Column
+            }
             Text("Площадь пола: ${s.floorArea?.let(::fmtArea) ?: "—"}")
             Text("Периметр: ${s.perimeter?.let(::fmtMm) ?: "—"}")
             Text("Площадь стен без проёмов: ${s.wallAreaNet?.let(::fmtArea) ?: "—"}")
@@ -473,7 +492,7 @@ private fun StatsCard(room: Room) {
                     color = if (s.needsRecheck) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            room.engineering.forEach { e ->
+            room.engineering.filter { it.type.category == Category.CONSTRUCTION }.forEach { e ->
                 e.totalLength?.let { Text("${MeasureFlow.engTitle(room, e.id)}: всего ${fmtMm(it)}") }
             }
         }

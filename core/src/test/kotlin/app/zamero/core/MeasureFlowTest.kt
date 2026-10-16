@@ -3,6 +3,7 @@ package app.zamero.core
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class MeasureFlowTest {
     private fun laser(v: Double) = Measure(v, Source.LASER)
@@ -45,5 +46,18 @@ class MeasureFlowTest {
         val room = Room("r", "Зал", openings = listOf(Opening(OpeningType.WINDOW), Opening(OpeningType.DOOR), Opening(OpeningType.WINDOW)))
         assertEquals("Окно 2: ширина", MeasureFlow.label(room, MeasureTarget.OpeningWidth(2)))
         assertEquals("Дверь 1: высота", MeasureFlow.label(room, MeasureTarget.OpeningHeight(1)))
+    }
+
+    @Test
+    fun `stages split room and engineering fields`() {
+        val pipe = EngElement("p", EngType.PIPE).withRoute(listOf(Point(0.0, 0.0), Point(100.0, 0.0)))
+        val partition = EngElement("w", EngType.PARTITION).withRoute(listOf(Point(0.0, 50.0), Point(100.0, 50.0)))
+        var room = Room("r", "Зал", engineering = listOf(pipe, partition)).withOutline(Outlines.RECTANGLE)
+        assertEquals(listOf(MeasureTarget.EngSegment("p", 0)), MeasureFlow.targets(room, engineering = true))
+        assertTrue(MeasureTarget.EngSegment("w", 0) in MeasureFlow.targets(room, engineering = false))
+        room = MeasureFlow.set(room, MeasureTarget.Wall(3), laser(3.0))
+        // «Далее» с последней стены не перескакивает в инженерию.
+        assertEquals(MeasureTarget.Height, MeasureFlow.nextEmpty(room, MeasureTarget.Wall(3), engineering = false))
+        assertEquals(MeasureTarget.EngSegment("p", 0), MeasureFlow.nextEmpty(room, engineering = true))
     }
 }
