@@ -114,4 +114,37 @@ class EditTest {
         assertEquals(listOf(2, 2, 2), out.engineering.map { it.route.size })
         assertEquals(Point(200.0, 0.0), out.engineering[1].route[0])
     }
+
+    @Test
+    fun `several contour walls in a row become one straight wall`() {
+        // Прямоугольник 5×3 с выступом снизу вверх на стенах 1–3.
+        val outline = listOf(
+            Point(0.0, 0.0), Point(2.0, 0.0), Point(2.0, 1.0), Point(3.0, 1.0), Point(3.0, 0.0),
+            Point(5.0, 0.0), Point(5.0, 3.0), Point(0.0, 3.0),
+        )
+        val r = Room("r", "Зал").withOutline(outline)
+        val out = assertNotNull(Edit.deleteWalls(r, setOf(1, 2, 3)))
+        assertEquals(listOf(Point(0.0, 0.0), Point(5.0, 0.0), Point(5.0, 3.0), Point(0.0, 3.0)), out.outline)
+        assertEquals(4, out.walls.size)
+    }
+
+    @Test
+    fun `single wall is removed by extending neighbours`() {
+        // Срезанный угол (стена 1) — восстанавливается прямой угол.
+        val outline = listOf(Point(0.0, 0.0), Point(3.0, 0.0), Point(4.0, 1.0), Point(4.0, 3.0), Point(0.0, 3.0))
+        val r = Room("r", "Зал", outline, walls = listOf(m(3.0), m(1.4), m(2.0), m(4.0), m(3.0)))
+        val out = assertNotNull(Edit.deleteWalls(r, setOf(1)))
+        assertEquals(4, out.outline.size)
+        assertNear(Point(4.0, 0.0), out.outline[1])
+        // Стены, изменившие длину, сброшены; нетронутые — сохранены.
+        assertNull(out.walls[0])
+        assertNull(out.walls[1])
+        assertEquals(4.0, out.walls[2]!!.meters)
+    }
+
+    @Test
+    fun `contour cannot drop below three walls`() {
+        assertNull(Edit.deleteWalls(room(), setOf(0, 1, 2)))
+        assertNull(Edit.deleteWalls(room(), setOf(1, 3)))
+    }
 }

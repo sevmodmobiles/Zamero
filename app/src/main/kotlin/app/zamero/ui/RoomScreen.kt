@@ -113,18 +113,10 @@ private fun LineMenu(
         if (element != null && element.type != EngType.LINE) {
             DropdownMenuItem(text = { Text("Свойства…") }, onClick = { onProperties(element) })
         }
-        if (target is MeasureTarget.Wall) {
-            DropdownMenuItem(
-                text = { Text("Удалить — нельзя для стены контура", color = MaterialTheme.colorScheme.onSurfaceVariant) },
-                onClick = {},
-                enabled = false,
-            )
-        } else {
-            DropdownMenuItem(
-                text = { Text("Удалить", color = MaterialTheme.colorScheme.error) },
-                onClick = onDelete,
-            )
-        }
+        DropdownMenuItem(
+            text = { Text("Удалить", color = MaterialTheme.colorScheme.error) },
+            onClick = onDelete,
+        )
     }
 }
 
@@ -199,7 +191,7 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                     CanvasMode.VIEW -> when (tool) {
                         Tool.SELECT -> summary(room, eng) + " · точки можно тянуть"
                         Tool.ERASE -> if (eraseSelection.isEmpty()) {
-                            "Стереть: обведите пальцем линии (лассо) или нажмите на линию"
+                            "Стереть: обведите пальцем линии или стены (лассо) или нажмите на линию"
                         } else {
                             "Можно обвести ещё или нажать на линию, чтобы убрать её из выбора"
                         }
@@ -272,16 +264,7 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                     hiddenSystems = vm.hiddenSystems,
                     onPointMove = vm::movePoint,
                     onErase = { hit ->
-                        val wall = (hit as? EraseHit.Segment)?.target is MeasureTarget.Wall
-                        if (wall) {
-                            Toast.makeText(
-                                context,
-                                "Стену контура удалить нельзя — потяните за её точки или перерисуйте контур",
-                                Toast.LENGTH_LONG,
-                            ).show()
-                        } else {
-                            eraseSelection = if (hit in eraseSelection) eraseSelection - hit else eraseSelection + hit
-                        }
+                        eraseSelection = if (hit in eraseSelection) eraseSelection - hit else eraseSelection + hit
                     },
                     onLasso = { picked ->
                         eraseSelection = eraseSelection + picked
@@ -313,7 +296,13 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                             onHeight = { seg -> lineMenu = null; heightTarget = seg },
                             onDelete = {
                                 lineMenu = null
-                                if (t is MeasureTarget.EngSegment) vm.deleteSegment(t.elementId, t.index)
+                                when (t) {
+                                    is MeasureTarget.EngSegment -> vm.deleteSegment(t.elementId, t.index)
+                                    is MeasureTarget.Wall -> if (!vm.eraseMany(emptySet(), emptySet(), setOf(t.index))) {
+                                        Toast.makeText(context, "У помещения должно остаться хотя бы 3 стены", Toast.LENGTH_SHORT).show()
+                                    }
+                                    else -> Unit
+                                }
                             },
                         )
                     }
@@ -335,8 +324,16 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                                     ((h as? EraseHit.Segment)?.target as? MeasureTarget.EngSegment)?.let { it.elementId to it.index }
                                 }.toSet()
                                 val columns = eraseSelection.mapNotNull { (it as? EraseHit.ColumnHit)?.id }.toSet()
-                                vm.eraseMany(segments, columns)
-                                eraseSelection = emptySet()
+                                val walls = eraseSelection.mapNotNull { ((it as? EraseHit.Segment)?.target as? MeasureTarget.Wall)?.index }.toSet()
+                                if (vm.eraseMany(segments, columns, walls)) {
+                                    eraseSelection = emptySet()
+                                } else {
+                                    Toast.makeText(
+                                        context,
+                                        "Так от помещения останется меньше трёх стен — уберите часть стен из выбора",
+                                        Toast.LENGTH_LONG,
+                                    ).show()
+                                }
                             },
                             colors = androidx.compose.material3.ButtonDefaults.buttonColors(
                                 containerColor = MaterialTheme.colorScheme.error,

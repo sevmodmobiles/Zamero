@@ -280,12 +280,16 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         editRoom { Edit.setSegmentElevation(this, elementId, index, mm) }
 
     /** Удаление выбранного лассо — одним шагом отмены. */
-    fun eraseMany(segments: Set<Pair<String, Int>>, columnIds: Set<String>) {
+    fun eraseMany(segments: Set<Pair<String, Int>>, columnIds: Set<String>, walls: Set<Int> = emptySet()): Boolean {
+        val room = openRoom ?: return false
+        // Стены контура — сначала (по номерам), потом линии и колонны (по id).
+        val withoutWalls = if (walls.isEmpty()) room else Edit.deleteWalls(Edit.rebase(room), walls) ?: return false
         dialogTarget = null
-        editRoom {
-            Edit.deleteSegments(this, segments) { UUID.randomUUID().toString() }
-                .let { r -> r.copy(columns = r.columns.filterNot { it.id in columnIds }) }
-        }
+        replaceRoom(
+            Edit.deleteSegments(withoutWalls, segments) { UUID.randomUUID().toString() }
+                .let { r -> r.copy(columns = r.columns.filterNot { it.id in columnIds }) },
+        )
+        return true
     }
 
     // --- Слои инженерии ------------------------------------------------------

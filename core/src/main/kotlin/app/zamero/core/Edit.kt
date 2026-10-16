@@ -256,6 +256,104 @@ object Edit {
         return room.copy(engineering = result)
     }
 
+    /**
+     * Стирает стены контура, сохраняя помещение замкнутым:
+     * - несколько стен подряд заменяются одной прямой стеной между крайними точками;
+     * - одна стена убирается, соседние продлеваются до пересечения (если они
+     *   параллельны — сходятся в середине убранной стены).
+     * Точки, оказавшиеся на одной прямой, сливаются. Длины изменившихся стен
+     * сбрасываются. null — если от контура осталось бы меньше трёх стен.
+     */
+    fun deleteWalls(room: Room, walls: Set<Int>): Room? {
+        val n = room.outline.size
+        val del = walls.filter { it in 0 until n }.toSet()
+        if (del.isEmpty()) return room
+        if (del.size >= n - 1) return null
+
+        val pos = MutableList<Point?>(n) { room.outline[it] }
+        val measure = room.walls.toMutableList()
+        fun next(i: Int) = (i + 1) % n
+        fun prev(i: Int) = (i - 1 + n) % n
+        fun prevKept(i: Int): Int { var j = prev(i); while (pos[j] == null) j = prev(j); return j }
+        fun nextKept(i: Int): Int { var j = next(i); while (pos[j] == null) j = next(j); return j }
+
+        // Серии подряд идущих стен (по кругу).
+        val starts = del.filter { prev(it) !in del }.sorted()
+        for (start in starts) {
+            var k = 0
+            while ((start + k) % n in del) k++
+            if (k >= 2) {
+                // Вершины внутри серии убираем, первая стена серии становится «мостом».
+                for (m in 1 until k) pos[(start + m) % n] = null
+                measure[start] = null
+            } else {
+                // Одна стена: продлеваем соседние до пересечения.
+                val i = start
+                val a = pos[prevKept(i)]!!
+                val b = pos[i]!!
+                val c = pos[next(i)]!!
+                val d = pos[nextKept(next(i))]!!
+                val x = intersect(a, b, c, d) ?: Point((b.x + c.x) / 2, (b.y + c.y) / 2)
+                pos[i] = x
+                pos[next(i)] = null
+                measure[prevKept(i)] = null
+                measure[i] = null
+            }
+        }
+
+        // Собираем контур; стены, начинавшиеся в убранных вершинах, исчезают.
+        var keptIdx = (0 until n).filter { pos[it] != null }
+        var outline = keptIdx.map { pos[it]!! }
+        var newWalls = keptIdx.map { measure[it] }
+        // Точки на одной прямой — лишние: сливаем стены.
+        var changed = true
+        while (changed && outline.size > 3) {
+            changed = false
+            for (j in outline.indices) {
+                val p0 = outline[(j - 1 + outline.size) % outline.size]
+                val p1 = outline[j]
+                val p2 = outline[(j + 1) % outline.size]
+                val cross = (p1.x - p0.x) * (p2.y - p1.y) - (p1.y - p0.y) * (p2.x - p1.x)
+                val len = dist(p0, p1) * dist(p1, p2)
+                if (len < 1e-18 || kotlin.math.abs(cross) / len < 0.017) { // < ~1°
+                    val before = (j - 1 + outline.size) % outline.size
+                    newWalls = newWalls.mapIndexed { w, m -> if (w == before) null else m }.filterIndexed { w, _ -> w != j }
+                    outline = outline.filterIndexed { w, _ -> w != j }
+                    keptIdx = keptIdx.filterIndexed { w, _ -> w != j }
+                    changed = true
+                    break
+                }
+            }
+        }
+        if (outline.size < 3) return null
+
+        // Привязки колонн: к уцелевшим стенам — с новыми номерами, к изменённым — сброс.
+        fun remap(w: Int): Int {
+            if (w < 0) return -1
+            val idx = keptIdx.indexOf(w)
+            return if (idx < 0 || newWalls[idx] == null && room.walls.getOrNull(w) != null) -1 else idx
+        }
+        return room.copy(
+            outline = outline,
+            walls = newWalls,
+            columns = room.columns.map { c ->
+                val u = remap(c.refWallU)
+                val v = remap(c.refWallV)
+                c.copy(refWallU = u, refWallV = v, offsetU = c.offsetU.takeIf { u >= 0 }, offsetV = c.offsetV.takeIf { v >= 0 })
+            },
+        )
+    }
+
+    /** Пересечение прямых ab и cd (не отрезков); null — параллельны. */
+    private fun intersect(a: Point, b: Point, c: Point, d: Point): Point? {
+        val r = Point(b.x - a.x, b.y - a.y)
+        val q = Point(d.x - c.x, d.y - c.y)
+        val denom = r.x * q.y - r.y * q.x
+        if (kotlin.math.abs(denom) < 1e-12 * (r.x * r.x + r.y * r.y + q.x * q.x + q.y * q.y)) return null
+        val t = ((c.x - a.x) * q.y - (c.y - a.y) * q.x) / denom
+        return Point(a.x + r.x * t, a.y + r.y * t)
+    }
+
     /** Своя высота участка (мм) или null — как у всей трассы. */
     fun setSegmentElevation(room: Room, elementId: String, index: Int, mm: Int?): Room = room.copy(
         engineering = room.engineering.map { e ->

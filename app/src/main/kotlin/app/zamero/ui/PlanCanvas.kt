@@ -363,6 +363,12 @@ fun PlanCanvas(
                         }
                     }
                     if (!engineeringStage) {
+                        // Стены контура тоже стираются (контур при этом остаётся замкнутым).
+                        current.first.forEachIndexed { i, (a, b) ->
+                            if (insidePolygon(Offset((a.x + b.x) / 2, (a.y + b.y) / 2), loop)) {
+                                picked += EraseHit.Segment(MeasureTarget.Wall(i))
+                            }
+                        }
                         currentColumns.forEach { (col, cp) ->
                             if (insidePolygon(v.toScreen(cp.center), loop)) picked += EraseHit.ColumnHit(col.id)
                         }
@@ -477,6 +483,10 @@ fun PlanCanvas(
                 pendingErase.forEach { hit ->
                     when (hit) {
                         is EraseHit.Segment -> {
+                            (hit.target as? MeasureTarget.Wall)?.let { w ->
+                                walls.getOrNull(w.index)?.let { (a, b) -> drawLine(red, a, b, 9.dp.toPx(), StrokeCap.Round, dash) }
+                                return@forEach
+                            }
                             val t = hit.target as? MeasureTarget.EngSegment ?: return@forEach
                             val pts = routes.firstOrNull { it.first.id == t.elementId }?.second ?: return@forEach
                             if (t.index + 1 >= pts.size) return@forEach
