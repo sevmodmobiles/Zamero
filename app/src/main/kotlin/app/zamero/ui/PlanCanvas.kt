@@ -50,10 +50,13 @@ import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.min
 
-enum class CanvasMode { VIEW, DRAW_OUTLINE, DRAW_ROUTE }
+enum class CanvasMode { VIEW, DRAW_OUTLINE, DRAW_ROUTE, DRAW_EXTRA }
 
 /** Цвет инженерной линии по типу. */
 internal fun engColor(type: EngType): Color = when (type) {
+    EngType.WALL -> Color(0xFF8D6E63)
+    EngType.PARTITION -> Color(0xFF78909C)
+    EngType.LINE -> Color(0xFFAFB42B)
     EngType.TRAY -> Color(0xFFEF6C00)
     EngType.PIPE -> Color(0xFF1565C0)
     EngType.DRAIN -> Color(0xFF2E7D32)
@@ -134,7 +137,7 @@ fun PlanCanvas(
     val labelBg = MaterialTheme.colorScheme.surface
 
     val gestures = when (mode) {
-        CanvasMode.DRAW_OUTLINE, CanvasMode.DRAW_ROUTE -> Modifier.pointerInput(mode) {
+        CanvasMode.DRAW_OUTLINE, CanvasMode.DRAW_ROUTE, CanvasMode.DRAW_EXTRA -> Modifier.pointerInput(mode) {
             awaitEachGesture {
                 val down = awaitFirstDown()
                 stroke.clear()
@@ -212,9 +215,14 @@ fun PlanCanvas(
             routes.forEach { (e, pts) ->
                 val color = engColor(e.type)
                 val dash = if (e.type == EngType.DRAIN) PathEffect.dashPathEffect(floatArrayOf(18f, 10f)) else null
+                val width = when (e.type) {
+                    EngType.WALL -> 5.dp
+                    EngType.LINE -> 2.dp
+                    else -> 4.dp
+                }
                 for (i in 0 until pts.size - 1) {
                     val sel = selected == MeasureTarget.EngSegment(e.id, i)
-                    drawLine(color, pts[i], pts[i + 1], (if (sel) 8.dp else 4.dp).toPx(), StrokeCap.Round, dash)
+                    drawLine(color, pts[i], pts[i + 1], (if (sel) width + 4.dp else width).toPx(), StrokeCap.Round, dash)
                 }
                 pts.forEach { drawCircle(color, 4.dp.toPx(), it) }
                 for (i in 0 until pts.size - 1) {

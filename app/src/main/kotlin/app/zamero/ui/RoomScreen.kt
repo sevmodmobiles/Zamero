@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -42,6 +43,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import app.zamero.core.Category
 import app.zamero.core.EngElement
 import app.zamero.core.EngType
 import app.zamero.core.Geometry
@@ -50,6 +52,8 @@ import app.zamero.core.MeasureTarget
 import app.zamero.core.OpeningType
 import app.zamero.core.Outlines
 import app.zamero.core.Plan
+import app.zamero.core.Point
+import app.zamero.core.Snap
 import app.zamero.core.Room
 import app.zamero.core.Straighten
 import app.zamero.laser.LaserState
@@ -69,6 +73,10 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
     var engEdit by remember { mutableStateOf<EngEdit?>(null) }
     var redrawing by remember(room.id) { mutableStateOf(false) }
     var specOpen by remember { mutableStateOf(false) }
+    // «Дорисовать»: рисуем линию, потом выбираем, что это, потом параметры.
+    var drawingExtra by remember(room.id) { mutableStateOf(false) }
+    var extraRoute by remember(room.id) { mutableStateOf<List<Point>?>(null) }
+    var extraType by remember(room.id) { mutableStateOf<EngType?>(null) }
     val laserState by vm.laser.state.collectAsState()
     val laserConnected = laserState is LaserState.Connected
     val target = vm.dialogTarget
@@ -77,6 +85,7 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
     val mode = when {
         redrawing || !room.hasOutline -> CanvasMode.DRAW_OUTLINE
         routing != null -> CanvasMode.DRAW_ROUTE
+        drawingExtra -> CanvasMode.DRAW_EXTRA
         else -> CanvasMode.VIEW
     }
 
@@ -99,6 +108,7 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                 when (mode) {
                     CanvasMode.DRAW_OUTLINE -> "Нарисуйте контур одной линией — она выпрямится сама"
                     CanvasMode.DRAW_ROUTE -> "Проведите трассу «${routing?.label}» поверх плана"
+                    CanvasMode.DRAW_EXTRA -> "Дорисуйте линию пальцем — концы сами притянутся к стенам"
                     CanvasMode.VIEW -> summary(room)
                 },
                 style = MaterialTheme.typography.bodySmall,
@@ -119,16 +129,18 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                     }
                 },
                 onRoute = { planStroke ->
-                    val element = routing ?: return@PlanCanvas
                     val plan = Plan.room(room) ?: return@PlanCanvas
-                    // Выравниваем трассу по направлению первой стены, затем переводим в координаты эскиза.
-                    val w0 = plan.walls.first()
-                    val base = atan2(w0.b.y - w0.a.y, w0.b.x - w0.a.x)
-                    val line = Straighten.polyline(planStroke, base)
+                    val line = straightenAndSnap(room, plan, planStroke, excludeId = routing?.id)
                     if (line == null) {
-                        Toast.makeText(context, "Трасса слишком короткая — проведите линию длиннее", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Линия слишком короткая — проведите длиннее", Toast.LENGTH_SHORT).show()
+                        return@PlanCanvas
+                    }
+                    val sketch = line.map { Plan.toSketch(room, plan, it) }
+                    if (routing != null) {
+                        vm.setRoute(routing.id, sketch)
                     } else {
-                        vm.setRoute(element.id, line.map { Plan.toSketch(room, plan, it) })
+                        drawingExtra = false
+                        extraRoute = sketch
                     }
                 },
                 onTap = vm::openDialog,
@@ -146,11 +158,13 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                         if (room.hasOutline) TextButton(onClick = { redrawing = false }) { Text("Отмена") }
                     }
                     CanvasMode.DRAW_ROUTE -> TextButton(onClick = vm::cancelRouting) { Text("Отмена") }
+                    CanvasMode.DRAW_EXTRA -> TextButton(onClick = { drawingExtra = false }) { Text("Отмена") }
                     CanvasMode.VIEW -> {
+                        FilledTonalButton(onClick = { drawingExtra = true }) { Text("Дорисовать") }
                         Box {
                             FilledTonalButton(onClick = { engMenu = true }) { Text("Инженерия ▾") }
                             DropdownMenu(expanded = engMenu, onDismissRequest = { engMenu = false }) {
-                                EngType.entries.forEach { type ->
+                                EngType.entries.filter { it.category == Category.ENGINEERING }.forEach { type ->
                                     DropdownMenuItem(
                                         text = { Text(type.title) },
                                         leadingIcon = { Box(Modifier.size(14.dp).background(engColor(type), CircleShape)) },
@@ -210,11 +224,49 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
         EngParamsDialog(
             type = edit.type,
             initial = edit.element,
+            confirmText = if (edit.element == null) "Далее: трасса" else "Сохранить",
             onSave = { params ->
                 if (edit.element == null) vm.addEngineering(edit.type, params) else vm.editEngineering(edit.element.id, params)
                 engEdit = null
             },
             onDismiss = { engEdit = null },
+        )
+    }
+    val pendingRoute = extraRoute
+    if (pendingRoute != null && extraType == null) {
+        AlertDialog(
+            onDismissRequest = { extraRoute = null },
+            title = { Text("Что дорисовали?") },
+            text = {
+                Column {
+                    EngType.entries.forEach { type ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable { extraType = type }.padding(vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Box(Modifier.size(14.dp).background(engColor(type), CircleShape))
+                            Text(type.title)
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { extraRoute = null }) { Text("Отмена") } },
+        )
+    }
+    val pendingType = extraType
+    if (pendingRoute != null && pendingType != null) {
+        EngParamsDialog(
+            type = pendingType,
+            initial = null,
+            confirmText = "Сохранить",
+            onSave = { params ->
+                vm.addElement(pendingType, params, pendingRoute)
+                extraRoute = null
+                extraType = null
+            },
+            onDismiss = { extraRoute = null; extraType = null },
         )
     }
     if (renaming) {
@@ -226,6 +278,22 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
     if (laserDialog) {
         LaserDialog(vm.laser, laserState, onDismiss = { laserDialog = false })
     }
+}
+
+/**
+ * Выпрямляет нарисованную линию вдоль стен помещения и притягивает её концы
+ * к стенам и уже нарисованным линиям. Всё в метрах плана.
+ */
+private fun straightenAndSnap(room: Room, plan: Plan.RoomPlan, stroke: List<Point>, excludeId: String?): List<Point>? {
+    val w0 = plan.walls.first()
+    val base = atan2(w0.b.y - w0.a.y, w0.b.x - w0.a.x)
+    val line = Straighten.polyline(stroke, base) ?: return null
+    val targets = plan.walls.map { it.a to it.b } +
+        room.engineering.filter { it.hasRoute && it.id != excludeId }.flatMap { e -> Plan.route(room, plan, e).zipWithNext() }
+    val xs = plan.vertices.map { it.x }
+    val ys = plan.vertices.map { it.y }
+    val diag = kotlin.math.hypot(xs.max() - xs.min(), ys.max() - ys.min())
+    return Snap.extendToWalls(line, targets, tolerance = diag * 0.06)
 }
 
 /** Короткая сводка под заголовком: площадь и сколько осталось измерить. */

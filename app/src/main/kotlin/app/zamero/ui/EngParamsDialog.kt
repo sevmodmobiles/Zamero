@@ -24,6 +24,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import app.zamero.core.Category
 import app.zamero.core.EngElement
 import app.zamero.core.EngType
 import app.zamero.core.Section
@@ -47,6 +48,7 @@ private fun commonRect(type: EngType): List<Pair<Int, Int>> = when (type) {
 fun EngParamsDialog(
     type: EngType,
     initial: EngElement?,
+    confirmText: String,
     onSave: (EngParams) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -68,7 +70,20 @@ fun EngParamsDialog(
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (type.section == Section.ROUND) {
+                if (type.section == Section.NONE) {
+                    if (type.hasThickness) {
+                        OutlinedTextField(
+                            width, { width = digits(it) },
+                            label = { Text("Толщина") }, suffix = { Text("мм") },
+                            singleLine = true, keyboardOptions = numbers,
+                        )
+                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            listOf(80, 100, 120, 200, 250, 380).forEach { t ->
+                                FilterChip(selected = width == t.toString(), onClick = { width = t.toString() }, label = { Text("$t") })
+                            }
+                        }
+                    }
+                } else if (type.section == Section.ROUND) {
                     OutlinedTextField(
                         diameter, { diameter = digits(it) },
                         label = { Text("Диаметр") }, suffix = { Text("мм") },
@@ -100,11 +115,13 @@ fun EngParamsDialog(
                         }
                     }
                 }
-                OutlinedTextField(
-                    elevation, { elevation = digits(it) },
-                    label = { Text("Отметка от пола") }, suffix = { Text("мм") },
-                    singleLine = true, keyboardOptions = numbers,
-                )
+                if (type.category == Category.ENGINEERING) {
+                    OutlinedTextField(
+                        elevation, { elevation = digits(it) },
+                        label = { Text("Отметка от пола") }, suffix = { Text("мм") },
+                        singleLine = true, keyboardOptions = numbers,
+                    )
+                }
                 OutlinedTextField(note, { note = it }, label = { Text("Комментарий") })
             }
         },
@@ -119,7 +136,7 @@ fun EngParamsDialog(
                         note = note.trim(),
                     ),
                 )
-            }) { Text(if (initial == null) "Далее: трасса" else "Сохранить") }
+            }) { Text(confirmText) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } },
     )

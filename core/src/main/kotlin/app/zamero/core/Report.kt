@@ -31,11 +31,12 @@ object Report {
             s.wallAreaNet?.let { appendLine("  Площадь стен без проёмов: ${m2(it)}") }
             s.volume?.let { appendLine("  Объём: ${"%.2f".format(Locale.ROOT, it)} м³") }
             if (s.needsRecheck) appendLine("  ⚠ Контур не сходится на ${mm(s.closureError!!)} — перемерьте стены")
-            if (room.engineering.isNotEmpty()) appendLine("  Инженерия:")
+            if (room.engineering.isNotEmpty()) appendLine("  Дополнительно:")
             room.engineering.forEach { e ->
                 val segs = e.segments.joinToString(" + ") { it?.millimeters?.toString() ?: "?" }
                 val total = e.totalLength?.let { " = ${mm(it)}" } ?: ""
-                appendLine("  • ${MeasureFlow.engTitle(room, e.id)}: ${e.label.removePrefix(e.type.title).trimStart(',', ' ')}")
+                val details = e.label.removePrefix(e.type.title).trimStart(',', ' ')
+                appendLine("  • ${MeasureFlow.engTitle(room, e.id)}${if (details.isNotEmpty()) ": $details" else ""}")
                 if (e.segments.isNotEmpty()) appendLine("    участки: $segs$total")
                 if (e.note.isNotBlank()) appendLine("    ${e.note}")
             }

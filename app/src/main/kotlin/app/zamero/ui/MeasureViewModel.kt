@@ -173,6 +173,12 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         routingElementId = e.id
     }
 
+    /** Дорисованный элемент: трасса уже есть (координаты эскиза). */
+    fun addElement(type: EngType, params: EngParams, route: List<Point>) {
+        val e = params.applyTo(EngElement(id = UUID.randomUUID().toString(), type = type)).withRoute(route)
+        editRoom { copy(engineering = engineering + e) }
+    }
+
     fun editEngineering(id: String, params: EngParams) = editElement(id) { params.applyTo(this) }
 
     fun deleteEngineering(id: String) {
