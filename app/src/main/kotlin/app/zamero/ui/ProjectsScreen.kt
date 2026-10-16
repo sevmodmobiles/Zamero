@@ -43,7 +43,15 @@ fun ProjectsScreen(vm: MeasureViewModel) {
     var creating by remember { mutableStateOf(false) }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Замеро — обмер помещений") }) },
+        topBar = {
+            TopAppBar(
+                title = { Text("Zamero") },
+                actions = {
+                    // Нажатие на номер версии — проверить обновления вручную.
+                    TextButton(onClick = { vm.checkUpdate(manual = true) }) { Text("v${vm.versionName}") }
+                },
+            )
+        },
         floatingActionButton = {
             ExtendedFloatingActionButton(onClick = { creating = true }) { Text("Новый объект +") }
         },

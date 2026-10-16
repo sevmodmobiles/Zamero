@@ -66,7 +66,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             laser.readings.collect { lastLaser = LaserReading(it, (lastLaser?.seq ?: 0) + 1) }
         }
-        checkUpdate()
+        // Обновления проверяет MainActivity.onResume — и при запуске, и при каждом возвращении.
     }
 
     // --- Объекты -------------------------------------------------------------
@@ -237,10 +237,41 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
     // --- Обновление ----------------------------------------------------------
 
-    fun checkUpdate() {
+    val versionName: String = runCatching { Updater.currentVersionName(app) }.getOrDefault("?")
+    /** Окно «Доступна версия» уже закрыли «Позже» для этой версии. */
+    var updatePostponed by mutableStateOf<String?>(null)
+        private set
+    /** Результат ручной проверки — показывается всплывающим сообщением. */
+    var updateMessage by mutableStateOf<String?>(null)
+        private set
+    private var lastCheck = 0L
+
+    /**
+     * Проверка обновлений. Автоматически — при каждом возврате в приложение
+     * (не чаще раза в 2 минуты), вручную — по нажатию на номер версии.
+     */
+    fun checkUpdate(manual: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!manual && now - lastCheck < 2 * 60_000) return
+        lastCheck = now
         viewModelScope.launch {
-            update = withContext(Dispatchers.IO) { runCatching { Updater.checkForUpdate(app) }.getOrNull() }
+            val result = withContext(Dispatchers.IO) { runCatching { Updater.checkForUpdate(app) } }
+            result.onSuccess { update = it }
+            if (manual) {
+                updateMessage = result.fold(
+                    onSuccess = { rel -> if (rel == null) "Установлена последняя версия $versionName" else null },
+                    onFailure = { "Не удалось проверить обновления: ${it.message}" },
+                )
+            }
         }
+    }
+
+    fun postponeUpdate() {
+        updatePostponed = update?.name
+    }
+
+    fun clearUpdateMessage() {
+        updateMessage = null
     }
 
     fun startUpdate() {
