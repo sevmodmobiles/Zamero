@@ -15,12 +15,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
@@ -75,7 +74,6 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
     val context = LocalContext.current
     var renaming by remember { mutableStateOf(false) }
     var laserDialog by remember { mutableStateOf(false) }
-    var engMenu by remember { mutableStateOf(false) }
     var engEdit by remember { mutableStateOf<EngEdit?>(null) }
     var redrawing by remember(room.id) { mutableStateOf(false) }
     var specOpen by remember { mutableStateOf(false) }
@@ -117,7 +115,7 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                 when (mode) {
                     CanvasMode.DRAW_OUTLINE -> "Нарисуйте контур одной линией — она выпрямится сама"
                     CanvasMode.DRAW_ROUTE -> "Проведите трассу «${routing?.label}» поверх плана"
-                    CanvasMode.DRAW_EXTRA -> "Дорисуйте линию (концы притянутся к стенам) или обведите колонну"
+                    CanvasMode.DRAW_EXTRA -> "Дорисуйте стену, перегородку или трассу инженерии; обведите колонну"
                     CanvasMode.VIEW -> summary(room)
                 },
                 style = MaterialTheme.typography.bodySmall,
@@ -180,21 +178,6 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
                     CanvasMode.DRAW_EXTRA -> TextButton(onClick = { drawingExtra = false }) { Text("Отмена") }
                     CanvasMode.VIEW -> {
                         FilledTonalButton(onClick = { drawingExtra = true }) { Text("Дорисовать") }
-                        Box {
-                            FilledTonalButton(onClick = { engMenu = true }) { Text("Инженерия ▾") }
-                            DropdownMenu(expanded = engMenu, onDismissRequest = { engMenu = false }) {
-                                EngType.entries.filter { it.category == Category.ENGINEERING }.forEach { type ->
-                                    DropdownMenuItem(
-                                        text = { Text(type.title) },
-                                        leadingIcon = { Box(Modifier.size(14.dp).background(engColor(type), CircleShape)) },
-                                        onClick = {
-                                            engMenu = false
-                                            engEdit = EngEdit(type, null)
-                                        },
-                                    )
-                                }
-                            }
-                        }
                         OutlinedButton(onClick = { specOpen = true }) { Text("Спецификация ▴") }
                         MeasureFlow.nextEmpty(room)?.let { next ->
                             OutlinedButton(onClick = { vm.openDialog(next) }) { Text("Мерить по порядку") }
@@ -299,15 +282,23 @@ fun RoomScreen(vm: MeasureViewModel, room: Room) {
             onDismissRequest = { extraRoute = null },
             title = { Text("Что дорисовали?") },
             text = {
-                Column {
-                    EngType.entries.forEach { type ->
-                        Row(
-                            Modifier.fillMaxWidth().clickable { extraType = type }.padding(vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        ) {
-                            Box(Modifier.size(14.dp).background(engColor(type), CircleShape))
-                            Text(type.title)
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    listOf(Category.CONSTRUCTION to "Стены", Category.ENGINEERING to "Инженерия").forEach { (category, header) ->
+                        Text(
+                            header,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
+                        )
+                        EngType.entries.filter { it.category == category }.forEach { type ->
+                            Row(
+                                Modifier.fillMaxWidth().clickable { extraType = type }.padding(vertical = 9.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                Box(Modifier.size(14.dp).background(engColor(type), CircleShape))
+                                Text(type.title)
+                            }
                         }
                     }
                 }
